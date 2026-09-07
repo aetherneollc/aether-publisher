@@ -88,13 +88,36 @@ platform adapter, so adapters never know or care where the video came from.
 
 ## Quick start (Docker)
 
+Images are built by GitHub Actions and published to
+[`ghcr.io/aetherneollc/dusk-publisher`](https://github.com/aetherneollc/dusk-publisher/pkgs/container/dusk-publisher)
+(`:main` and `:latest` on the default branch, plus `:sha-<short>` and tag
+names). You do not need a working local Docker builder — `docker compose pull`
+is enough.
+
 ```bash
-cp .env.example .env            # fill in STUDIO_AGENT_KEY etc. if using pull mode
+cp .env.example .env            # fill in CONTROL_PLANE_URL / STUDIO_AGENT_KEY for pull mode
 cp config/accounts.example.yaml config/accounts.yaml   # edit to your accounts
 mkdir -p queue && cp config/local_queue.example.yaml queue/local_queue.yaml  # if using local mode
 
-docker compose up -d --build
+# Pull the GHCR image (default in docker-compose.yml):
+docker compose pull
+docker compose up -d
 docker compose logs -f
+```
+
+If the GHCR package is private to the org, log in once with a GitHub token
+that can `read:packages` (never commit the token):
+
+```bash
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+docker compose pull
+docker compose up -d
+```
+
+To build locally instead of pulling:
+
+```bash
+PUBLISHER_IMAGE=dusk-publisher:local docker compose up -d --build
 ```
 
 The container's default command is `daemon run` (pull mode). Cookies persist
@@ -161,13 +184,21 @@ This is exactly the self-test in `tests/test_local_runner_e2e.py` and
 
 ## Pull mode: integrating with 暮色工房
 
-Set in `.env`:
+Copy `.env.example` to `.env` and set the control-plane pair the daemon
+sends on every `/ops/*` call. Do not commit `.env`.
 
 ```
+# Shared secret; sent as header X-Studio-Agent-Key (same value as the
+# control plane's AGENT_SHARED_KEY / STUDIO_AGENT_KEY Worker secret).
 STUDIO_AGENT_KEY=<shared secret>
+# Base URL of 暮色工房 (no trailing slash).
 CONTROL_PLANE_URL=https://anime-factory.hero-30b.workers.dev
 AGENT_ID=dusk-publisher-01
 ```
+
+`docker compose up -d` reads `.env` automatically. After cookies are in
+the volume (see login below), the daemon polls the control plane; no extra
+compose flags are required.
 
 `dusk-publisher daemon run` runs three independent, decoupled loops (see
 [Health checks & monitoring](#health-checks--monitoring) for why they're
@@ -394,16 +425,15 @@ yourself once you have real Docker + a real VPS.
 
 ### First deployment self-check checklist
 
-I cannot build or run this image in this sandbox (`docker.sock` is
-permission-denied here too — same limitation you already hit). Run these
-on the actual VPS after `docker compose up -d --build`, in order:
+GitHub Actions builds the image (see [CI: GitHub Actions / GHCR](#ci-github-actions--ghcr));
+this sandbox cannot talk to `docker.sock`. On the VPS after `docker compose pull && docker compose up -d` (or a local `--build`), in order:
 
 ```bash
 # 1. Did the build even produce an image, and how big is it?
 #    (Playwright's base image + Chromium is large — a few GB is normal.
 #    If this is suspiciously small, e.g. <500MB, the browser install step
 #    likely failed silently.)
-docker images dusk-publisher:local
+docker images ghcr.io/aetherneollc/dusk-publisher
 
 # 2. Did `patchright install chrome` actually put a browser binary on disk?
 #    (This is the #1 thing that silently breaks: the pip install succeeds,
@@ -548,6 +578,24 @@ of "nice to have but not blocking" steps.
 This repeats per language (`zh`/`en`/`ja` today) without any language ever
 being hardcoded in the pipeline — every language-specific string comes from
 data (`Publication.lang`, the `languages` registry), not code.
+
+## CI: GitHub Actions / GHCR
+
+[`.github/workflows/docker.yml`](.github/workflows/docker.yml) runs on every
+push to `main`, on tags matching `v*`, and on `workflow_dispatch`. It logs
+into GHCR with the workflow `GITHUB_TOKEN` (no Docker Hub credentials, no
+self-hosted runner, no local `docker.sock`) and pushes:
+
+| Tag | When |
+|---|---|
+| `ghcr.io/aetherneollc/dusk-publisher:main` | push to `main` |
+| `ghcr.io/aetherneollc/dusk-publisher:latest` | push to `main` |
+| `ghcr.io/aetherneollc/dusk-publisher:sha-<7-char>` | every build |
+| `ghcr.io/aetherneollc/dusk-publisher:<tag>` | git tag `v*` |
+
+The image is `linux/amd64` (GitHub-hosted `ubuntu-latest`). First push from
+Actions creates the package; if pulls 403, set the package visibility to
+public under the repo's Packages settings, or `docker login ghcr.io` as above.
 
 ## Development / tests
 

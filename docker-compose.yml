@@ -1,7 +1,9 @@
 services:
   dusk-publisher:
+    # GitHub Actions publishes this image on push to main / v* tags.
+    # Override for a local build: PUBLISHER_IMAGE=dusk-publisher:local docker compose up -d --build
+    image: ${PUBLISHER_IMAGE:-ghcr.io/aetherneollc/dusk-publisher:main}
     build: .
-    image: dusk-publisher:local
     container_name: dusk-publisher
     restart: unless-stopped
     env_file:
