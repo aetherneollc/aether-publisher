@@ -9,5 +9,3 @@ __pycache__
 data/accounts
 data/cache
 tests
-*.md
-!README.md
