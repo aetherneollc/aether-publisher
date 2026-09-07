@@ -25,6 +25,21 @@ services:
     # requires either a local X server / VNC, or running dusk-publisher
     # outside Docker for that one step.
     command: ["daemon", "run"]
+    # NOT published to the host by default: /healthz has no auth (see
+    # README "Health checks"), so leaving it container-internal-only avoids
+    # exposing operational metadata (disk space, whether cookies are valid,
+    # version) on a public-facing VPS. `docker ps` / `docker inspect
+    # --format='{{json .State.Health}}' dusk-publisher` already work
+    # without publishing the port, since HEALTHCHECK below runs *inside*
+    # the container. Uncomment to also curl it from the VPS host directly:
+    # ports:
+    #   - "127.0.0.1:8080:8080"   # bind to localhost only, not 0.0.0.0
+    healthcheck:
+      test: ["CMD", "python3", "/app/scripts/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
 
 volumes:
   dusk-publisher-data:

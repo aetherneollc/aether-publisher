@@ -54,6 +54,25 @@ class Settings:
     check_interval_seconds: int = field(
         default_factory=lambda: int(os.environ.get("CHECK_INTERVAL_SECONDS", "1800"))
     )
+    # Heartbeat must fire on its own fixed cadence, independent of whether
+    # there's work — that's what lets a human tell "alive but idle" apart
+    # from "dead" from the control plane's side (see health.py / daemon.py).
+    heartbeat_interval_seconds: int = field(
+        default_factory=lambda: int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "60"))
+    )
+    # The browser-launch probe is the expensive health check (it actually
+    # spawns a Chromium process) — run it far less often than the heartbeat
+    # itself; the heartbeat just reports the last probe's cached result.
+    health_check_interval_seconds: int = field(
+        default_factory=lambda: int(os.environ.get("HEALTH_CHECK_INTERVAL_SECONDS", "300"))
+    )
+    # Below this, disk_ok flips false and the container reports unhealthy —
+    # uploads/downloads of video files can eat disk fast on an unattended VPS.
+    disk_min_free_mb: int = field(
+        default_factory=lambda: int(os.environ.get("DISK_MIN_FREE_MB", "1024"))
+    )
+    # Port the in-process /healthz HTTP server listens on (daemon mode only).
+    healthz_port: int = field(default_factory=lambda: int(os.environ.get("HEALTHZ_PORT", "8080")))
 
     # Optional per-platform proxies (patchright's Chromium ignores the
     # system proxy; it must be passed explicitly if the platform is blocked

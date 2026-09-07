@@ -32,6 +32,11 @@ class PubStatus(str, Enum):
     claimed = "claimed"
     published = "published"
     failed = "failed"
+    # Distinct from `failed`: the account has no valid cookie. Per contract
+    # v1 update, this rolls the row back to `approved` for retry once a
+    # human re-logs in (control plane's job, not ours) rather than treating
+    # it as a hard failure. See pipeline/runner.py.
+    needs_login = "needs_login"
 
 
 class Visibility(str, Enum):
@@ -73,6 +78,14 @@ class Publication(BaseModel):
     status: PubStatus = PubStatus.approved
     url: Optional[str] = None
     parent_pub_id: Optional[str] = None
+    # Denormalized by the control plane (contract v1 fix, adopted after we
+    # flagged that /ops/work's approved-only filter made a short's parent
+    # long-form URL unreachable): the parent's `url` once it is published,
+    # copied directly onto the short's own row. Local queue mode still
+    # resolves this itself via parent_pub_id (see pipeline/dropback.py) and
+    # ignores this field; ControlPlaneSource uses it directly since it has
+    # no way to look up other rows by id. See README "Shared contract".
+    parent_url: Optional[str] = None
     scheduled_at: Optional[str] = None
     published_at: Optional[str] = None
     error: Optional[str] = None

@@ -116,7 +116,15 @@ class LocalQueueSource(TaskSource):
         found = False
         for item in raw.get("publications", []):
             if item.get("pub_id") == pub_id:
-                item["status"] = status
+                if status == "needs_login":
+                    # Mirror the control plane's contract-v1 behavior: a
+                    # missing/stale cookie is not a terminal failure, it's
+                    # retryable once a human re-logs in. Roll the row back to
+                    # `approved` so the next `queue run` picks it up again
+                    # automatically, instead of leaving it stuck forever.
+                    item["status"] = "approved"
+                else:
+                    item["status"] = status
                 if url is not None:
                     item["url"] = url
                 item["error"] = error
@@ -128,6 +136,6 @@ class LocalQueueSource(TaskSource):
             raise QueueFormatError(f"report(): pub_id {pub_id!r} not found in {self.queue_path}")
         _dump_raw(self.queue_path, raw)
 
-    async def heartbeat(self, accounts: list[dict]) -> None:
+    async def heartbeat(self, accounts: list[dict], health: dict | None = None) -> None:
         # No control plane to notify in local mode; caller (CLI/daemon) logs instead.
         return None

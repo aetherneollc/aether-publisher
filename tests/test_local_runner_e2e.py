@@ -137,10 +137,13 @@ async def test_no_cookies_stops_at_login_and_gates_shorts(tmp_path, data_dir, fa
         "story1-ep01-zh-x-short",
     }
 
-    # Queue file reflects reality: long failed with a clear "needs login" message.
+    # Queue file reflects reality: per contract v1 (needs_login is retryable,
+    # not terminal), the row is rolled back to `approved` with the reason
+    # recorded in `error`, so the next `queue run` retries automatically
+    # once a human logs in — it is NOT left permanently `failed`.
     all_pubs = {p.pub_id: p for p in await source.all_publications()}
     long_pub = all_pubs["story1-ep01-zh-yt-long"]
-    assert long_pub.status.value == "failed"
+    assert long_pub.status.value == "approved"
     assert "needs login" in long_pub.error
     assert "dusk-publisher youtube login --account yt_zh_main" in long_pub.error
 
@@ -166,7 +169,8 @@ async def test_shorts_unblock_once_parent_published_and_reach_login_gate(tmp_pat
     needs_login_ids = {pub_id for pub_id, _, _ in summary.needs_login}
     assert needs_login_ids == {"story1-ep01-zh-tt-short", "story1-ep01-zh-x-short"}
 
+    # Rolled back to `approved` (retryable), same as the long-video case above.
     all_pubs = {p.pub_id: p for p in await source.all_publications()}
-    assert all_pubs["story1-ep01-zh-tt-short"].status.value == "failed"
-    assert all_pubs["story1-ep01-zh-x-short"].status.value == "failed"
+    assert all_pubs["story1-ep01-zh-tt-short"].status.value == "approved"
+    assert all_pubs["story1-ep01-zh-x-short"].status.value == "approved"
     assert "needs login" in all_pubs["story1-ep01-zh-tt-short"].error

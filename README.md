@@ -69,12 +69,14 @@ dusk-publisher/
 │   ├── pipeline/
 │   │   ├── dropback.py      the growth-loop: parent_pub_id -> inject URL
 │   │   ├── runner.py        the one engine, works with any TaskSource
-│   │   └── daemon.py        infinite poll loop for pull mode
+│   │   └── daemon.py        infinite poll loop for pull mode + health/heartbeat cadences
+│   ├── health.py            browser/disk/cookie-volume/control-plane probes
+│   ├── healthz_server.py    tiny stdlib GET /healthz HTTP server (daemon mode only)
 │   └── cli.py                `dusk-publisher ...` (Typer)
 ├── config/                  accounts.example.yaml, local_queue.example.yaml
-├── scripts/make_fake_video.py
+├── scripts/make_fake_video.py, scripts/healthcheck.py (Docker HEALTHCHECK)
 ├── tests/                   see "Development" below
-├── Dockerfile / docker-compose.yml
+├── Dockerfile / docker-compose.yml   both define HEALTHCHECK
 └── THIRD_PARTY_NOTICES.md
 ```
 
@@ -167,66 +169,299 @@ CONTROL_PLANE_URL=https://anime-factory.hero-30b.workers.dev
 AGENT_ID=dusk-publisher-01
 ```
 
-`dusk-publisher daemon run` then loops:
-`GET /ops/work` → for each returned publication, `POST /ops/claim` (get a
-signed asset URL, download it) → publish via the matching platform adapter
-→ `POST /ops/report` → periodically `POST /ops/heartbeat` with every
-configured account's `check()` result, so the control plane can surface
-"XX account needs re-login" to a human.
+`dusk-publisher daemon run` runs three independent, decoupled loops (see
+[Health checks & monitoring](#health-checks--monitoring) for why they're
+decoupled):
+- every `POLL_INTERVAL_SECONDS` (default 60s): `GET /ops/work` → for each
+  returned publication, `POST /ops/claim` (get signed asset/cover URLs,
+  download them) → publish via the matching platform adapter →
+  `POST /ops/report`.
+- every `CHECK_INTERVAL_SECONDS` (default 1800s): the real, per-account
+  `check()` (launches a browser per account) to refresh cookie validity.
+- every `HEARTBEAT_INTERVAL_SECONDS` (default 60s, **fires even when
+  idle**): `POST /ops/heartbeat` with every account's last-known
+  `cookie_ok` plus a `health` object — see below.
 
 ### Shared contract v1 (consumed as-is, not owned by this project)
 
 ```
 GET  /ops/work?agent=<id>   -> {"publications": [...], "languages": {...}}
-POST /ops/claim             {"pub_id", "agent"} -> {"ok", "asset_url", "pub"}
-POST /ops/report            {"pub_id", "status": "published"|"failed", "url", "error"}
-POST /ops/heartbeat         {"agent", "accounts": [{"platform","name","cookie_ok"}]}
+POST /ops/claim             {"pub_id", "agent"} -> {"ok", "asset_url", "cover_url", "pub"}
+POST /ops/report            {"pub_id", "status": "published"|"failed"|"needs_login", "url", "error"}
+POST /ops/heartbeat         {"agent", "accounts": [{"platform","name","cookie_ok"}], "health": {...}}
 ```
 Auth header on every request: `X-Studio-Agent-Key: <STUDIO_AGENT_KEY>`.
 401 body: `{"ok": false, "error": "unauthorized"}`.
 
 Publication record fields: `pub_id, story_id, episode_code, lang, platform
 (youtube|tiktok|x), account, kind (long|short), asset_key, cover_key,
-title, description, tags, status, url, parent_pub_id, scheduled_at,
-published_at, error`.
+title, description, tags, status, url, parent_pub_id, parent_url,
+scheduled_at, published_at, error`.
 
-### ⚠️ Contract gaps found while implementing (flagged, not fixed unilaterally)
+### Contract gaps — resolved this round ✅
 
-1. **No signed URL for `cover_key`.** `/ops/claim`'s documented response
-   only has a single `asset_url` (for the video). In pull mode,
-   `ControlPlaneSource.claim()` therefore always returns `cover_path=None`
-   — covers/thumbnails are simply not uploaded in pull mode right now. Local
-   queue mode is unaffected (it reads `cover_key` straight off disk).
-   **Suggested fix:** either a second signed URL field (e.g. `cover_url`)
-   on the `/ops/claim` response, or a generic "give me a signed GET for this
-   R2 key" endpoint.
-2. **No way to resolve a short's `parent_url` in pull mode.** The dropback
-   feature needs the *URL* of the long-form video a short promotes.
-   `/ops/work` only returns `status=approved` rows, and by the time a short
-   is released the parent is `status=published` — so the parent is never
-   in the same `/ops/work` response the short is in, and there's no
-   `/ops/pub/<id>` lookup to fetch it separately. Right now,
-   `PublisherPipeline` detects this (`ControlPlaneSource` has no
-   `all_publications()`), logs a warning, and publishes the short **without**
-   an injected link — i.e. the growth-loop's core mechanic is currently a
-   no-op in pull mode until this is resolved. Local queue mode has no such
-   gap (it can see every record, any status, so it resolves this itself).
-   **Suggested fix (simplest):** denormalize — have the control plane
-   include the resolved `parent_url` directly on the short's publication
-   record in `/ops/work`, e.g. as `parent_url` or by copying `url` from the
-   parent when it's already known. That avoids adding a new endpoint.
-3. `PublisherPipeline` currently reports `status: "failed"` (not a distinct
-   "needs_login" status) via `/ops/report` when an account has no valid
-   cookie, with the human-readable reason in `error`. If a dedicated status
-   value would be more useful to the control plane's UI (vs. parsing
-   `error`), that's a one-line change on this side — flagging so it's a
-   joint decision rather than a silent assumption.
+Both gaps flagged in the previous round were fixed on the control-plane
+side and adopted here:
 
-None of the above blocks local queue mode. #2 (no parent URL) is the one
-that matters most: it means dropback — this whole project's stated growth
-mechanic — doesn't actually inject the link yet when driven by the control
-plane, only in local-queue mode. Fixing it needs a decision on the C line
-(or here, once told which direction to go).
+1. **`parent_url` denormalization.** The control plane now includes the
+   resolved `parent_url` directly on a short's own `/ops/work` row
+   (`Publication.parent_url`). `PublisherPipeline` uses it directly for any
+   `TaskSource` that can't look up other rows by id (i.e. `ControlPlaneSource`
+   — detected via `hasattr(source, "all_publications")`); local queue mode
+   still resolves it itself via `parent_pub_id` (see `pipeline/dropback.py`),
+   since it can see every record regardless of status anyway. A defensive
+   fallback remains: if a gated short somehow arrives with no `parent_url`
+   set, the pipeline still publishes it (server-side gating is trusted) but
+   logs a warning and skips the link injection, rather than blocking forever.
+2. **`cover_url` on `/ops/claim`.** `ControlPlaneSource.claim()` now
+   downloads it when present; a failed cover download is still non-fatal
+   (same treatment as a missing thumbnail everywhere else in this project).
+3. **`needs_login` status on `/ops/report`.** Adopted as specified:
+   `PublisherPipeline` now reports `status="needs_login"` (not `"failed"`)
+   when an account has no valid/working cookie. Local queue mode mirrors the
+   control plane's own behavior itself (no server to do it for us): it
+   rolls the row back to `status: approved` so the next `queue run` retries
+   automatically once a human logs in, rather than leaving it stuck.
+
+### Asset path correction — no code change needed
+
+The corrected long-form path
+(`stories/<story_id>/episodes/<EP>/final/<EP>.<lang>.mp4`) doesn't affect
+this project: `asset_key`/`cover_key` are always treated as opaque strings
+here — `LocalQueueSource` resolves them relative to `--media-root`,
+`ControlPlaneSource` never inspects the path shape at all (it only ever
+uses `Path(asset_key).suffix` to pick a local cache-file extension after
+downloading from whatever signed URL `/ops/claim` hands back). No path
+convention is hardcoded anywhere in `dusk-publisher`, so nothing needed to
+change here — flagging that this was checked, not assumed.
+
+None of the above blocks local queue mode, which never depended on the
+control plane in the first place.
+
+## Health checks & monitoring
+
+A `daemon run` container on an unattended VPS is otherwise a black box: is
+it dead, or just idle? Did Chromium quietly stop working after an `apt
+upgrade`? Is the cookie volume still writable? None of that is visible from
+`docker ps` alone unless something actively checks and reports it. This
+project does that in three parts:
+
+### 1. `GET /healthz` inside the container
+
+`daemon run` starts a tiny stdlib-only HTTP server (`healthz_server.py`, no
+FastAPI/uvicorn — just `http.server`) on `$HEALTHZ_PORT` (default `8080`).
+It returns:
+- **200** + JSON body when healthy.
+- **503** + JSON body when not, with `last_error` naming exactly which
+  check failed.
+
+```bash
+$ curl -s http://localhost:8080/healthz | python -m json.tool
+{
+  "ok": false,
+  "version": "0.1.0",
+  "uptime_s": 143,
+  "browser_ok": false,
+  "disk_free_mb": 85088,
+  "queue_depth": 0,
+  "last_error": "browser_launch_failed: patchright not installed: No module named 'patchright'",
+  "last_success_at": null,
+  "checks": { "...": "breakdown of every individual probe, for humans" }
+}
+```
+(^ real output from this sandbox, where patchright is deliberately not
+installed — see [Development](#development--tests) — which is exactly the
+"browser silently broken" failure mode this probe exists to catch.)
+
+Four failure modes are covered, checked independently, named specifically
+in `last_error` (priority order when several are broken at once: browser →
+disk → cookie volume → control plane):
+
+| Check | What it actually does | Catches |
+|---|---|---|
+| **process alive** | implicit — if `/healthz` answers at all, the event loop is alive | a hung/crashed daemon (Docker's own curl timing out flips `docker ps` to unhealthy with no help from us) |
+| **`browser_ok`** | *actually launches* a headless Chromium via patchright and closes it again — not just "is patchright importable" | broken/missing Chromium deps, a bad image rebuild, disk-full-mid-`patchright install`, wrong CPU arch — the single most likely thing to silently break unattended |
+| **`disk_ok`** | `shutil.disk_usage(DATA_DIR)` vs. `DISK_MIN_FREE_MB` (default 1024) | disk filling up from downloaded videos/cache, silently failing every future download |
+| **`cookie_volume_ok`** | writes + reads back + deletes a marker file in `ACCOUNTS_FILE`'s directory | `/data` volume mounted read-only, permission errors after a `docker compose down -v` recreate |
+| **`control_plane_ok`** (pull mode only) | reflects the most recent `/ops/*` request's outcome | control plane unreachable/misconfigured `STUDIO_AGENT_KEY`/DNS issues |
+
+The expensive one (`browser_ok`, spawns a real Chromium process) runs on
+its own `HEALTH_CHECK_INTERVAL_SECONDS` cadence (default 300s), decoupled
+from the cheap ones (disk/cookie-volume, effectively free, refreshed every
+poll) and from the heartbeat POST cadence (below) — a slow browser check
+should never delay a heartbeat, and vice versa.
+
+**Design call I made, flagging it explicitly:** `control_plane_ok` factors
+into the overall `ok`/`last_error`, which does mean a container can show
+"unhealthy" purely because of a transient network blip to the control
+plane, even though its own resources (browser/disk/cookie volume) are
+completely fine. I judged this correct for `daemon run` specifically —
+`/healthz` only ever runs in that mode, and a publisher daemon that can't
+reach the thing it's supposed to pull work from *is* materially not doing
+its job — but it's a defensible design choice either way, not a hard
+requirement from the brief's checklist. If you'd rather this be a purely
+self-contained container check (matching more typical container-healthcheck
+conventions), it's a one-line change in `health.py::HealthState.ok`.
+
+Local queue mode never starts this server at all (there's no daemon to
+monitor — a one-shot `queue run` either succeeds or prints an error to
+stdout/exits nonzero, which is already fully visible).
+
+### 2. `docker ps` / `docker inspect` integration
+
+Both the `Dockerfile`'s `HEALTHCHECK` and `docker-compose.yml`'s
+`healthcheck:` block run `scripts/healthcheck.py` (stdlib-only, no `curl`
+dependency — the base image may not have it) every 30s, which just curls
+`/healthz` and exits 0/1 accordingly:
+
+```bash
+docker ps                                   # STATUS column shows "healthy"/"unhealthy"
+docker inspect --format='{{json .State.Health}}' dusk-publisher | python -m json.tool
+```
+
+One-off CLI invocations (`docker compose run dusk-publisher queue run ...`,
+`... youtube login ...`) never start the `/healthz` server, so
+`scripts/healthcheck.py` deliberately treats "connection refused" as
+healthy (exit 0) — only an actual non-200 response (the daemon *is* up and
+*is* reporting itself unhealthy) fails the check. Otherwise every
+one-off command would show as "unhealthy" for no reason.
+
+`/healthz` is **not published to the host** by default (see
+`docker-compose.yml`) — it has no auth, and shouldn't leak operational
+metadata to the public internet on an always-on VPS. `docker ps`/`docker
+inspect` work regardless, since `HEALTHCHECK` runs *inside* the container.
+Uncomment the commented-out `ports:` block (bound to `127.0.0.1`, not
+`0.0.0.0`) if you want to `curl` it from the VPS host directly.
+
+### 3. Reporting health to 暮色工房 via `/ops/heartbeat`
+
+Every `HEARTBEAT_INTERVAL_SECONDS` (default 60s), **regardless of whether
+there was any work that cycle**, the daemon POSTs:
+
+```json
+{
+  "agent": "vps-01",
+  "accounts": [{"platform": "tiktok", "name": "...", "cookie_ok": true}],
+  "health": {
+    "ok": true,
+    "version": "0.1.0",
+    "uptime_s": 3600,
+    "browser_ok": true,
+    "disk_free_mb": 20480,
+    "queue_depth": 2,
+    "last_error": null,
+    "last_success_at": "2026-09-07T14:00:00Z"
+  }
+}
+```
+`health`'s field names match the spec exactly, no extras (the extra
+per-check breakdown only appears in `/healthz`'s own JSON body, not here).
+This is the fixed-cadence heartbeat that lets a human watching the control
+plane's UI distinguish "container alive but idle" (heartbeats keep arriving,
+`ok: true`, `queue_depth: 0`) from "container dead" (heartbeats stop
+arriving entirely) — previously indistinguishable, since both looked like
+"nothing happened."
+
+`accounts[].cookie_ok` comes from the last `check()` sweep
+(`CHECK_INTERVAL_SECONDS` cadence, not refreshed every heartbeat — a
+per-account browser launch is too expensive to do every 60s), so it can lag
+reality by up to `CHECK_INTERVAL_SECONDS`; `health` itself is fresher
+(`disk`/`cookie_volume`/`control_plane` every poll cycle, `browser_ok` every
+`HEALTH_CHECK_INTERVAL_SECONDS`).
+
+### What I could not actually test
+
+Everything above is unit-tested (`tests/test_health.py`,
+`tests/test_healthz_server.py`, `tests/test_control_plane.py`) and was
+manually smoke-tested end to end — ran the real `daemon run` process
+against an unreachable control plane, confirmed `/healthz` correctly
+reported `503` with `browser_ok: false` ("patchright not installed", since
+this sandbox doesn't have it) and `control_plane_ok: false` ("connection
+attempts failed"), and confirmed the daemon logged the failure and kept
+running rather than crashing. What I could **not** test, since it needs a
+working patchright/Chromium install (this sandbox intentionally doesn't
+have one — see [Development](#development--tests)) and an actual Docker
+daemon (`docker.sock` access denied in this sandbox too):
+- `browser_ok: true` in a real, working deployment.
+- The actual `docker ps` "healthy" transition after `--start-period`
+  elapses, and the "unhealthy" transition after `--retries` consecutive
+  failures.
+- `disk_ok: false` under a genuinely full disk (simulated with an absurdly
+  high threshold in tests instead — real behavior, fake threshold).
+
+See the deployment checklist below for exactly how to verify these
+yourself once you have real Docker + a real VPS.
+
+### First deployment self-check checklist
+
+I cannot build or run this image in this sandbox (`docker.sock` is
+permission-denied here too — same limitation you already hit). Run these
+on the actual VPS after `docker compose up -d --build`, in order:
+
+```bash
+# 1. Did the build even produce an image, and how big is it?
+#    (Playwright's base image + Chromium is large — a few GB is normal.
+#    If this is suspiciously small, e.g. <500MB, the browser install step
+#    likely failed silently.)
+docker images dusk-publisher:local
+
+# 2. Did `patchright install chrome` actually put a browser binary on disk?
+#    (This is the #1 thing that silently breaks: the pip install succeeds,
+#    but the browser download/extract step fails partway — e.g. disk full
+#    during build, or the base image's OS deps drifted from patchright's
+#    expectations.)
+docker compose run --rm dusk-publisher python -c \
+  "from patchright.sync_api import sync_playwright; \
+   p = sync_playwright().start(); b = p.chromium.launch(headless=True); \
+   print('chromium OK:', b.version); b.close(); p.stop()"
+# Expect: "chromium OK: <version string>". Anything else (traceback,
+# hang, "Executable doesn't exist") means the browser install is broken —
+# check the build log for the `patchright install chrome --with-deps` step,
+# and confirm the base image tag in Dockerfile's `PLAYWRIGHT_VERSION` ARG
+# is a real published tag.
+
+# 3. Is the daemon actually running and reporting healthy?
+docker compose ps                      # STATUS column: "Up (healthy)"
+docker inspect --format='{{.State.Health.Status}}' dusk-publisher
+docker compose logs --tail=50 dusk-publisher
+
+# 4. Cross-check /healthz directly (container-internal, no port publish needed):
+docker compose exec dusk-publisher python3 /app/scripts/healthcheck.py; echo "exit=$?"
+docker compose exec dusk-publisher python3 -c \
+  "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/healthz').read().decode())"
+
+# 5. Is the cookie volume actually the named volume, and does it survive
+#    a restart? (Catches "forgot to mount /data" / "cookies in the wrong
+#    path" before you waste time re-logging-in for nothing.)
+docker volume inspect dusk-publisher_dusk-publisher-data
+docker compose restart dusk-publisher
+docker compose exec dusk-publisher ls -la /data/accounts
+```
+
+**Common build failure causes**, roughly in order of likelihood:
+1. **`patchright install chrome --with-deps` fails silently** because the
+   Dockerfile's `||` fallback (`python -m patchright install chrome`
+   without `--with-deps`) succeeded instead, downloading the browser binary
+   but not its OS-level shared-library dependencies. Symptom: build
+   "succeeds", but step 2 above fails with a shared-library error
+   (`error while loading shared libraries: ...`). Fix: the base image
+   (`mcr.microsoft.com/playwright/python`) should already have every OS dep
+   Playwright/patchright needs — if `--with-deps` itself is failing, check
+   for `apt-get`/network issues during the build, not a patchright bug.
+2. **Wrong/EOL `PLAYWRIGHT_VERSION` build arg** — Microsoft only keeps a
+   handful of tags published at `mcr.microsoft.com/playwright/python`;
+   an old/typo'd tag makes the `FROM` line fail outright with "manifest
+   not found". Check available tags if this happens.
+3. **Disk full on the build host mid-build** — Chromium + its deps are
+   several hundred MB; a nearly-full VPS disk can make the `RUN patchright
+   install` step fail partway with a confusing error unrelated to disk
+   space on its face. `df -h` before building.
+4. **`HEALTHCHECK` shows "unhealthy" forever** even though logs look fine —
+   almost always means `HEALTHZ_PORT` inside the container doesn't match
+   what `scripts/healthcheck.py` is checking (only relevant if you changed
+   the env var without also updating the `HEALTHCHECK`'s implicit default),
+   or the daemon crashed on startup before ever binding the port — check
+   `docker compose logs` for a traceback in the first few seconds.
 
 ## Account routing
 
@@ -322,7 +557,7 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-34 tests, all runnable **without patchright/a browser installed** (every
+59 tests, all runnable **without patchright/a browser installed** (every
 platform import is lazy — see `platforms/browser.py`'s module docstring)
 and without any network access. Notably:
 
@@ -346,17 +581,38 @@ and without any network access. Notably:
   local queue file (idempotent report/persist, asset resolution),
   account routing/fallback, cookie-file sanity checks, dropback helpers,
   and the `Publication` model.
+- `tests/test_runner_denormalized_parent_url.py` — proves the pull-mode
+  dropback fix: a control-plane-shaped fake source (deliberately has no
+  `all_publications()`) with a short carrying `parent_url` pre-set gets it
+  threaded into the `PublishRequest`, and the defensive fallback (missing
+  `parent_url` on a gated row) still publishes, just without a link.
+- `tests/test_control_plane.py` — `cover_url` download on `/ops/claim`
+  (present / absent / failing-non-fatally), `/ops/heartbeat`'s `health`
+  passthrough, and `last_request_ok`/`last_request_error` bookkeeping
+  exercised through a real `httpx.MockTransport` round-trip (not mocked
+  at the method level) so the actual request/response-handling code runs.
+- `tests/test_health.py`, `tests/test_healthz_server.py` — every individual
+  probe (disk/cookie-volume for real via `tmp_path`; the browser-launch
+  probe against the *real* "patchright not installed" path in this
+  sandbox, not a simulation of it), `HealthState`'s `ok`/`last_error`
+  aggregation and priority order, the exact `/ops/heartbeat` payload shape,
+  and the real `/healthz` HTTP server (actual socket, actual 200/503/404).
 
 `scripts/make_fake_video.py` generates the tiny real `.mp4`/`.jpg` used in
 tests and for manual local-queue trials (falls back to a non-playable
 placeholder file if `ffmpeg` isn't on `PATH` — fine for these tests, since
 none of them ever open the file in a browser).
 
-Docker build/compose were **not** verified in the environment this was
-built in (no daemon access there); `docker-compose.yml`'s YAML was
-validated for syntax, and the `Dockerfile` follows the standard
-`mcr.microsoft.com/playwright/python` base + `patchright install chrome`
-pattern. Worth a real build/smoke-run before relying on it in production.
+Docker build/compose were still **not** verified in the environment this
+was built in (`docker.sock` access denied there); see
+[Health checks & monitoring](#health-checks--monitoring)'s "first
+deployment self-check checklist" for exactly how to verify a real build
+yourself. What *was* verified manually here without Docker: ran the real
+`dusk-publisher daemon run` process directly (not in a container) against
+an intentionally unreachable control plane, confirmed it survived the
+failure and kept looping, and confirmed `/healthz` correctly reported the
+real "patchright not installed" + "connection failed" states as `503`
+with specific `last_error` text — see that section for the full output.
 
 ## Credits & License
 

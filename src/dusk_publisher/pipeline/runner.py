@@ -32,6 +32,10 @@ class RunSummary:
     failed: list[tuple[str, str]] = field(default_factory=list)
     needs_login: list[tuple[str, str, str]] = field(default_factory=list)  # (pub_id, platform, account)
     skipped_waiting_on_parent: list[str] = field(default_factory=list)
+    # Snapshot of how many approved rows fetch_work() returned at the start
+    # of this pass — used by the daemon to report `queue_depth` in health
+    # telemetry (see pipeline/daemon.py, health.py).
+    pending_count: int = 0
 
     @property
     def made_progress(self) -> bool:
@@ -52,14 +56,16 @@ class PublisherPipeline:
 
     async def run_once(self) -> RunSummary:
         pending, langs = await self.source.fetch_work()
-        summary = RunSummary()
+        summary = RunSummary(pending_count=len(pending))
 
         # Local-queue sources can see every record (any status), which is
         # what lets us self-enforce parent-published gating and resolve the
-        # parent's URL for dropback. Control-plane sources cannot (see
-        # pipeline/runner.py module note + README contract-gaps section):
-        # gating is trusted to have already happened server-side, and
-        # parent_url resolution is best-effort (None if unavailable).
+        # parent's URL for dropback ourselves. Control-plane sources cannot
+        # look up arbitrary rows by id, so they rely on the denormalized
+        # `Publication.parent_url` field the control plane now populates
+        # directly on the short's own row (contract v1 fix, adopted after we
+        # flagged that /ops/work's approved-only filter made the parent's
+        # URL otherwise unreachable — see README "Shared contract").
         supports_lookup = hasattr(self.source, "all_publications")
 
         for pub in pending:
@@ -73,12 +79,18 @@ class PublisherPipeline:
                         summary.skipped_waiting_on_parent.append(pub.pub_id)
                         continue
                     parent_url = parent.url
+                elif pub.parent_url:
+                    parent_url = pub.parent_url
                 else:
+                    # Defensive fallback: the control plane didn't send parent_url on
+                    # this row even though it's gated on a parent. Contract says gating
+                    # itself already happened server-side, so we still publish — just
+                    # without an injected dropback link — rather than block forever.
                     log.warning(
-                        "[%s] control-plane source cannot resolve parent_url for dropback "
-                        "(contract has no parent lookup endpoint) — publishing without an "
-                        "injected link; see README contract-gaps",
+                        "[%s] short is gated on parent %s but no parent_url was provided "
+                        "by the control plane — publishing without an injected dropback link",
                         pub.pub_id,
+                        pub.parent_pub_id,
                     )
 
             await self._publish_one(pub, langs, parent_url, summary)
@@ -126,7 +138,12 @@ class PublisherPipeline:
             result = await adapter.publish(account, req)
         except NeedsLoginError as exc:
             log.warning("[%s] %s", pub.pub_id, exc)
-            await self.source.report(pub.pub_id, "failed", error=str(exc))
+            # `needs_login` (not `failed`) per contract v1 update: the control
+            # plane rolls the row back to `approved` for retry once a human
+            # re-logs in, and flags the account's cookie_ok=False, instead of
+            # treating this as a hard/terminal failure. LocalQueueSource
+            # mirrors that same rollback itself (see sources/local.py).
+            await self.source.report(pub.pub_id, "needs_login", error=str(exc))
             summary.needs_login.append((pub.pub_id, pub.platform.value, account))
             return
         except Exception as exc:  # noqa: BLE001 - never let one bad task kill the daemon loop
