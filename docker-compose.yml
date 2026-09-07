@@ -1,0 +1,30 @@
+services:
+  dusk-publisher:
+    build: .
+    image: dusk-publisher:local
+    container_name: dusk-publisher
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATA_DIR=/data
+      - ACCOUNTS_FILE=/app/config/accounts.yaml
+      - LOCAL_QUEUE_FILE=/app/queue/local_queue.yaml
+    volumes:
+      # Cookie files: /data/accounts/<platform>/<account>.json (see README).
+      # Named volume so cookies survive image rebuilds/`docker compose down`.
+      - dusk-publisher-data:/data
+      # Your account routing config (platform + optional lang -> account name).
+      - ./config:/app/config:ro
+      # Local queue mode task files (only needed if you don't use the
+      # 暮色工房 control plane pull-mode; see README "Local queue mode").
+      - ./queue:/app/queue
+    # `login` needs a visible browser window. Default `daemon run` in CMD is
+    # headless and fine to leave as `unless-stopped`. For interactive login,
+    # run a one-off exec (see README) — it forces headed mode itself, which
+    # requires either a local X server / VNC, or running dusk-publisher
+    # outside Docker for that one step.
+    command: ["daemon", "run"]
+
+volumes:
+  dusk-publisher-data:

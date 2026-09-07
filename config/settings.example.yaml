@@ -1,0 +1,4 @@
+# NOTE: dusk-publisher currently reads all runtime settings from environment
+# variables (see .env.example), not from this file. This file is reserved
+# for future non-secret, non-account settings that don't belong in .env
+# (e.g. per-platform default tag lists). Safe to ignore for now.

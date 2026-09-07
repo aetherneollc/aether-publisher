@@ -1,0 +1,37 @@
+# Copy to accounts.yaml (docker-compose.yml mounts ./config into the
+# container, and ACCOUNTS_FILE defaults to /app/config/accounts.yaml).
+#
+# Routing rule: publish looks up by (platform, lang) first; if no entry has
+# a matching `lang`, it falls back to the platform's entry with no `lang`
+# set at all (a "generic" account). This is what lets you choose, purely by
+# editing this file:
+#   - "one account per language" -> give every entry below a `lang`.
+#   - "one account for everything" -> give a platform only a lang-less entry.
+#   - a mix -> e.g. a dedicated `ja` YouTube channel, but `en`/`zh` share a
+#     generic YouTube account.
+#
+# `name` is the cookie-file key: cookies live at
+# /data/accounts/<platform>/<name>.json (see README).
+
+accounts:
+  - platform: youtube
+    name: yt_zh_main
+    lang: zh
+    notes: "Main 简体中文 channel"
+
+  - platform: youtube
+    name: yt_en_ja_shared
+    lang: null # generic fallback: used for any lang with no dedicated entry
+    notes: "Shared channel for en/ja until they each get their own"
+
+  - platform: tiktok
+    name: tt_zh
+    lang: zh
+
+  - platform: tiktok
+    name: tt_global
+    lang: null
+
+  - platform: x
+    name: x_global
+    lang: null

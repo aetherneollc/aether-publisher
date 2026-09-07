@@ -1,0 +1,25 @@
+# Secrets & runtime data — never commit real cookies or account data.
+.env
+data/accounts/**
+!data/accounts/.gitkeep
+data/cache/**
+!data/cache/.gitkeep
+queue/*.local.yaml
+*.local.yaml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Browser automation artifacts
+verify_code.txt
+*.png
+!docs/**/*.png

@@ -1,0 +1,59 @@
+# Copy to ../queue/local_queue.yaml (or point --file at a copy anywhere).
+# Paths in asset_key/cover_key are resolved relative to --media-root
+# (defaults to a `media/` folder next to the queue file), unless absolute.
+#
+# This is the SAME record shape as the 暮色工房 control-plane contract's
+# publication rows (see README "Shared contract"), so a file like this is
+# also a reasonable way to hand-test the control-plane path's logic without
+# a live server.
+
+languages:
+  zh: { name: "简体中文", platform_tag_style: cn }
+  en: { name: "English", platform_tag_style: intl }
+  ja: { name: "日本語", platform_tag_style: jp }
+
+publications:
+  # 1) The long-form episode goes out on YouTube first.
+  - pub_id: story1-ep01-zh-yt-long
+    story_id: story1
+    episode_code: ep01
+    lang: zh
+    platform: youtube
+    kind: long
+    asset_key: story1_ep01.mp4
+    cover_key: story1_ep01.jpg
+    title: "《暮色工房》第一集：开工"
+    description: "第一集正片。"
+    tags: [暮色工房, 动画]
+    playlist: "暮色工房 第一季"
+    visibility: public
+    status: approved
+
+  # 2) The short only gets processed once (1)'s status becomes `published`
+  #    (enforced by the runner via parent_pub_id — see pipeline/dropback.py).
+  - pub_id: story1-ep01-zh-tt-short
+    story_id: story1
+    episode_code: ep01
+    lang: zh
+    platform: tiktok
+    kind: short
+    asset_key: story1_ep01_short01.zh.mp4
+    cover_key: story1_ep01_short01.zh.jpg
+    title: "开工！(1/1)"
+    description: "看正片 👉"
+    tags: [暮色工房]
+    parent_pub_id: story1-ep01-zh-yt-long
+    status: approved
+
+  - pub_id: story1-ep01-zh-x-short
+    story_id: story1
+    episode_code: ep01
+    lang: zh
+    platform: x
+    kind: short
+    asset_key: story1_ep01_short01.zh.mp4
+    title: "开工！"
+    description: ""
+    tags: [暮色工房]
+    parent_pub_id: story1-ep01-zh-yt-long
+    status: approved
