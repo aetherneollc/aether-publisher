@@ -1,0 +1,49 @@
+name: Publisher run
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publisher-run
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CONTROL_PLANE_URL: ${{ secrets.CONTROL_PLANE_URL }}
+      STUDIO_AGENT_KEY: ${{ secrets.STUDIO_AGENT_KEY }}
+      AGENT_ID: github-actions-publisher
+      HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+      HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
+      ALL_PROXY: ${{ secrets.ALL_PROXY }}
+      NO_PROXY: ${{ secrets.NO_PROXY }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Pull publisher image
+        run: docker pull ghcr.io/aetherneollc/aether-publisher:main
+
+      - name: Run publisher polling window
+        run: |
+          docker run --rm \
+            -e CONTROL_PLANE_URL \
+            -e STUDIO_AGENT_KEY \
+            -e AGENT_ID \
+            -e HTTP_PROXY \
+            -e HTTPS_PROXY \
+            -e ALL_PROXY \
+            -e NO_PROXY \
+            -e HEADLESS=1 \
+            -e POLL_INTERVAL_SECONDS=60 \
+            -e HEARTBEAT_INTERVAL_SECONDS=60 \
+            ghcr.io/aetherneollc/aether-publisher:main \
+            daemon run
