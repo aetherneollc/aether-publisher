@@ -1,4 +1,4 @@
-# dusk-publisher
+# aether-publisher
 
 A self-hostable, Docker-ized **multi-platform video publisher** for YouTube,
 TikTok, and X (Twitter). It uploads long-form videos and short-form
@@ -89,7 +89,7 @@ platform adapter, so adapters never know or care where the video came from.
 ## Quick start (Docker)
 
 Images are built by GitHub Actions and published to
-[`ghcr.io/aetherneollc/dusk-publisher`](https://github.com/aetherneollc/dusk-publisher/pkgs/container/dusk-publisher)
+[`ghcr.io/aetherneollc/aether-publisher`](https://github.com/aetherneollc/aether-publisher/pkgs/container/aether-publisher)
 (`:main` and `:latest` on the default branch, plus `:sha-<short>` and tag
 names). You do not need a working local Docker builder — `docker compose pull`
 is enough.
@@ -148,6 +148,42 @@ docker cp ./local-data/accounts/youtube/yt_zh_main.json \
 
 Once logged in, `check` and `publish` run perfectly headless and are what
 the daemon uses day to day.
+
+### One-command Cookie capture
+
+For all accounts in `runtime/accounts.yaml`, a trusted desktop can open the
+three real login pages in sequence, validate the resulting browser state, and
+upload the encrypted-at-rest GitHub Actions secrets with one command:
+
+```bash
+cp config/accounts.example.yaml runtime/accounts.yaml
+# Edit account names/language routing, then authenticate GitHub CLI once:
+gh auth login
+./scripts/capture-cookies.sh
+```
+
+The script never asks for or stores passwords. You enter credentials and 2FA
+directly into TikTok, X, and YouTube. It saves Patchright `storage_state` files
+under the git-ignored `runtime/data/accounts/`, validates every account, packs
+them, and sets `COOKIE_BUNDLE_B64` plus `ACCOUNTS_YAML_B64` in GitHub Secrets.
+Use `--platform youtube` or `--account yt_zh_main` to refresh only part of the
+set. See [`docs/COOKIE_CAPTURE.md`](docs/COOKIE_CAPTURE.md) for the security and
+size-limit details.
+
+## Manual GitHub Actions runner
+
+The `Publisher run` workflow is deliberately `workflow_dispatch` only. One
+invocation restores runtime state, starts a Cloudflare Zero Trust WARP SOCKS
+sidecar, verifies that traffic is actually on WARP, then processes several
+publication tasks sequentially inside the same publisher container. It is
+bounded by both task count and elapsed time and uses workflow concurrency to
+prevent two publishers from claiming the same account at once.
+
+Required repository secrets are documented in
+[`docs/GITHUB_ACTIONS_RUNNER.md`](docs/GITHUB_ACTIONS_RUNNER.md). The Docker
+composition is runner-independent: the same `scripts/runner-entrypoint.sh`
+works on GitHub-hosted runners today and can be invoked by a VPS or another CI
+runner later.
 
 ## Local queue mode (standalone, no control plane needed)
 
@@ -433,7 +469,7 @@ this sandbox cannot talk to `docker.sock`. On the VPS after `docker compose pull
 #    (Playwright's base image + Chromium is large — a few GB is normal.
 #    If this is suspiciously small, e.g. <500MB, the browser install step
 #    likely failed silently.)
-docker images ghcr.io/aetherneollc/dusk-publisher
+docker images ghcr.io/aetherneollc/aether-publisher
 
 # 2. Did `patchright install chrome` actually put a browser binary on disk?
 #    (This is the #1 thing that silently breaks: the pip install succeeds,
@@ -588,10 +624,10 @@ self-hosted runner, no local `docker.sock`) and pushes:
 
 | Tag | When |
 |---|---|
-| `ghcr.io/aetherneollc/dusk-publisher:main` | push to `main` |
-| `ghcr.io/aetherneollc/dusk-publisher:latest` | push to `main` |
-| `ghcr.io/aetherneollc/dusk-publisher:sha-<7-char>` | every build |
-| `ghcr.io/aetherneollc/dusk-publisher:<tag>` | git tag `v*` |
+| `ghcr.io/aetherneollc/aether-publisher:main` | push to `main` |
+| `ghcr.io/aetherneollc/aether-publisher:latest` | push to `main` |
+| `ghcr.io/aetherneollc/aether-publisher:sha-<7-char>` | every build |
+| `ghcr.io/aetherneollc/aether-publisher:<tag>` | git tag `v*` |
 
 The image is `linux/amd64` (GitHub-hosted `ubuntu-latest`). First push from
 Actions creates the package; if pulls 403, set the package visibility to

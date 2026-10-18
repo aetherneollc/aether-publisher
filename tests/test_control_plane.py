@@ -163,3 +163,32 @@ async def test_request_tracks_401_failure_via_real_httpx_roundtrip(tmp_path):
     assert source.last_request_ok is False
     assert "unauthorized" in source.last_request_error
     await source.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cloudflare_access_headers_are_added(tmp_path):
+    seen = {}
+
+    def handler(request):
+        seen.update(request.headers)
+        return httpx.Response(200, json={"ok": True})
+
+    source = ControlPlaneSource(
+        base_url="https://cp.example",
+        api_key="agent-key",
+        agent_id="a1",
+        cache_dir=tmp_path,
+        cf_access_client_id="client-id.access",
+        cf_access_client_secret="client-secret",
+    )
+    await source._client.aclose()
+    source._client = httpx.AsyncClient(
+        headers=source._client.headers,
+        transport=httpx.MockTransport(handler),
+    )
+
+    await source._request("GET", "/ops/work")
+    assert seen["x-studio-agent-key"] == "agent-key"
+    assert seen["cf-access-client-id"] == "client-id.access"
+    assert seen["cf-access-client-secret"] == "client-secret"
+    await source.aclose()

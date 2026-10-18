@@ -1,0 +1,19 @@
+<dict>
+  <key>organization</key>
+  <string>YOUR_ZERO_TRUST_TEAM_NAME</string>
+  <key>auth_client_id</key>
+  <string>YOUR_SERVICE_TOKEN_CLIENT_ID.access</string>
+  <key>auth_client_secret</key>
+  <string>YOUR_SERVICE_TOKEN_CLIENT_SECRET</string>
+  <key>warp_tunnel_protocol</key>
+  <string>masque</string>
+  <key>service_mode</key>
+  <string>proxy</string>
+  <!-- The sidecar forwards container port 40000 to WARP on 40001. -->
+  <key>proxy_port</key>
+  <integer>40001</integer>
+  <key>auto_connect</key>
+  <integer>1</integer>
+  <key>onboarding</key>
+  <false/>
+</dict>

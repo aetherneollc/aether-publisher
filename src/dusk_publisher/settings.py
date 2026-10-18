@@ -34,6 +34,12 @@ class Settings:
     )
     studio_agent_key: str = field(default_factory=lambda: os.environ.get("STUDIO_AGENT_KEY", ""))
     agent_id: str = field(default_factory=lambda: os.environ.get("AGENT_ID", "dusk-publisher-01"))
+    cf_access_client_id: str | None = field(
+        default_factory=lambda: os.environ.get("CF_ACCESS_CLIENT_ID") or None
+    )
+    cf_access_client_secret: str | None = field(
+        default_factory=lambda: os.environ.get("CF_ACCESS_CLIENT_SECRET") or None
+    )
 
     # Filesystem layout
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("DATA_DIR", "/data")))

@@ -43,13 +43,26 @@ log = get_logger(__name__)
 
 
 class ControlPlaneSource(TaskSource):
-    def __init__(self, base_url: str, api_key: str, agent_id: str, cache_dir: Path, timeout: float = 30.0):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        agent_id: str,
+        cache_dir: Path,
+        timeout: float = 30.0,
+        cf_access_client_id: str | None = None,
+        cf_access_client_secret: str | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.agent_id = agent_id
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        headers = {"X-Studio-Agent-Key": api_key}
+        if cf_access_client_id and cf_access_client_secret:
+            headers["CF-Access-Client-Id"] = cf_access_client_id
+            headers["CF-Access-Client-Secret"] = cf_access_client_secret
         self._client = httpx.AsyncClient(
-            headers={"X-Studio-Agent-Key": api_key},
+            headers=headers,
             timeout=timeout,
         )
         # Lightweight connectivity bookkeeping, read by health.py to decide

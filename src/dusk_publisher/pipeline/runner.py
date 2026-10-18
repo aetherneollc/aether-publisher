@@ -11,7 +11,9 @@ what the control plane's own `/ops/work` filtering is for.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
+from typing import Iterable
 
 from dusk_publisher.accounts.router import AccountRouter
 from dusk_publisher.errors import AccountNotFoundError, AssetNotFoundError, ControlPlaneError, NeedsLoginError
@@ -36,6 +38,8 @@ class RunSummary:
     # of this pass — used by the daemon to report `queue_depth` in health
     # telemetry (see pipeline/daemon.py, health.py).
     pending_count: int = 0
+    selected_count: int = 0
+    stopped_by_budget: bool = False
 
     @property
     def made_progress(self) -> bool:
@@ -54,9 +58,35 @@ class PublisherPipeline:
         self.router = router
         self.settings = settings
 
-    async def run_once(self) -> RunSummary:
+    async def run_once(
+        self,
+        *,
+        max_tasks: int | None = None,
+        max_seconds: float | None = None,
+        platforms: Iterable[str] | None = None,
+        group_by_account: bool = False,
+    ) -> RunSummary:
         pending, langs = await self.source.fetch_work()
         summary = RunSummary(pending_count=len(pending))
+
+        platform_filter = {p.strip().lower() for p in (platforms or []) if p.strip()}
+        if platform_filter:
+            pending = [pub for pub in pending if pub.platform.value in platform_filter]
+
+        if group_by_account:
+            def batch_key(pub: Publication) -> tuple[str, str, str]:
+                try:
+                    account = self.router.resolve(pub.platform.value, pub.lang)
+                except AccountNotFoundError:
+                    account = pub.account or ""
+                return pub.platform.value, account, pub.pub_id
+
+            pending = sorted(pending, key=batch_key)
+
+        if max_tasks is not None:
+            pending = pending[:max(0, max_tasks)]
+        summary.selected_count = len(pending)
+        started_at = time.monotonic()
 
         # Local-queue sources can see every record (any status), which is
         # what lets us self-enforce parent-published gating and resolve the
@@ -69,6 +99,10 @@ class PublisherPipeline:
         supports_lookup = hasattr(self.source, "all_publications")
 
         for pub in pending:
+            if max_seconds is not None and time.monotonic() - started_at >= max_seconds:
+                summary.stopped_by_budget = True
+                log.warning("batch time budget reached; leaving remaining tasks for the next run")
+                break
             parent_url: str | None = None
             if pub.is_gated_on_parent():
                 if supports_lookup:

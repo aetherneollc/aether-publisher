@@ -83,6 +83,8 @@ async def run_forever(settings: Settings) -> None:
         api_key=settings.studio_agent_key,
         agent_id=settings.agent_id,
         cache_dir=settings.cache_dir,
+        cf_access_client_id=settings.cf_access_client_id,
+        cf_access_client_secret=settings.cf_access_client_secret,
     )
     pipeline = PublisherPipeline(source, router, settings)
 

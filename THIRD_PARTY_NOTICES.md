@@ -65,6 +65,15 @@ dependency chain does not apply here.
 Used directly as our browser automation driver (drop-in replacement for
 Playwright's Python API). See `requirements.txt` / `pyproject.toml`.
 
+## cloudflare-warp-proxy
+
+- Repository: https://github.com/seiry/docker-warp-proxy
+- License: MIT
+
+Used as an external container image by `deploy/runner/compose.yaml` to expose a
+Cloudflare WARP / Zero Trust connection as a local SOCKS proxy. No source code
+from that repository is vendored here.
+
 ## Other Python dependencies
 
 See `pyproject.toml` for the full list (Typer, Pydantic, httpx, PyYAML, etc.),

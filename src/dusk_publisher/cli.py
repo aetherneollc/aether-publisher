@@ -35,6 +35,7 @@ app = typer.Typer(add_completion=False, help="Multi-platform video publisher (Yo
 platform_app = typer.Typer(help="Per-platform login/check/publish.")
 queue_app = typer.Typer(help="Standalone local queue mode (no control plane needed).")
 daemon_app = typer.Typer(help="Pull-mode daemon against the 暮色工房 control plane.")
+batch_app = typer.Typer(help="Bounded pull-mode batch for ephemeral CI runners.")
 accounts_app = typer.Typer(help="Inspect configured accounts.")
 
 
@@ -131,6 +132,66 @@ def accounts_list():
         )
 
 
+@accounts_app.command("capture")
+def accounts_capture(
+    platform: Optional[str] = typer.Option(None, "--platform", help="Only capture one platform."),
+    account: Optional[str] = typer.Option(None, "--account", help="Only capture one account name."),
+):
+    """One guided login pass over configured accounts.
+
+    Each account opens a visible browser. Sign in and complete any 2FA; the
+    resulting Playwright storage state is written under DATA_DIR/accounts.
+    Run this on a trusted desktop/VNC host, never in a headless CI job.
+    """
+    settings = get_settings()
+    router = AccountRouter.from_file(settings.accounts_file)
+    selected = [
+        entry for entry in router.all()
+        if (not platform or entry.platform == platform.lower())
+        and (not account or entry.name == account)
+    ]
+    if not selected:
+        typer.echo("No configured accounts matched the requested filters.")
+        raise typer.Exit(code=1)
+
+    failures = 0
+    for index, entry in enumerate(selected, start=1):
+        typer.echo(f"[{index}/{len(selected)}] Open login for {entry.platform}:{entry.name}")
+        result = _run(get_adapter(entry.platform, settings).login(entry.name))
+        if result.ok:
+            typer.echo(f"  saved -> {result.account_file}")
+        else:
+            failures += 1
+            typer.echo(f"  FAILED: {result.detail}")
+    if failures:
+        raise typer.Exit(code=1)
+
+
+@accounts_app.command("check-all")
+def accounts_check_all(
+    platform: Optional[str] = typer.Option(None, "--platform", help="Only check one platform."),
+    account: Optional[str] = typer.Option(None, "--account", help="Only check one account name."),
+):
+    """Validate every configured cookie with a real headless browser."""
+    settings = get_settings()
+    router = AccountRouter.from_file(settings.accounts_file)
+    selected = [
+        entry for entry in router.all()
+        if (not platform or entry.platform == platform.lower())
+        and (not account or entry.name == account)
+    ]
+    if not selected:
+        typer.echo("No configured accounts matched the requested filters.")
+        raise typer.Exit(code=1)
+    failures = 0
+    for entry in selected:
+        result = _run(get_adapter(entry.platform, settings).check(entry.name))
+        typer.echo(f"[{entry.platform}:{entry.name}] {'OK' if result.ok else 'INVALID'}: {result.detail}")
+        failures += 0 if result.ok else 1
+    if failures:
+        raise typer.Exit(code=1)
+
+
 app.add_typer(accounts_app, name="accounts")
 
 
@@ -180,6 +241,63 @@ def daemon_run():
 
 
 app.add_typer(daemon_app, name="daemon")
+
+
+@batch_app.command("run")
+def batch_run(
+    max_tasks: int = typer.Option(3, "--max-tasks", min=1, max=50),
+    max_minutes: int = typer.Option(240, "--max-minutes", min=1, max=330),
+    platforms: str = typer.Option("all", "--platforms", help="Comma-separated or 'all'."),
+):
+    """Process a bounded task batch, then exit.
+
+    Designed for ephemeral runners: tasks are grouped by platform/account,
+    executed sequentially, and left for a later run once the time budget is
+    reached.
+    """
+    settings = get_settings()
+    router = AccountRouter.from_file(settings.accounts_file)
+    from dusk_publisher.sources.control_plane import ControlPlaneSource
+
+    source = ControlPlaneSource(
+        base_url=settings.control_plane_url,
+        api_key=settings.studio_agent_key,
+        agent_id=settings.agent_id,
+        cache_dir=settings.cache_dir,
+        cf_access_client_id=settings.cf_access_client_id,
+        cf_access_client_secret=settings.cf_access_client_secret,
+    )
+    selected_platforms = [] if platforms.strip().lower() == "all" else platforms.split(",")
+    pipeline = PublisherPipeline(source, router, settings)
+
+    async def execute():
+        try:
+            return await pipeline.run_once(
+                max_tasks=max_tasks,
+                max_seconds=max_minutes * 60,
+                platforms=selected_platforms,
+                group_by_account=True,
+            )
+        finally:
+            await source.aclose()
+
+    summary = _run(execute())
+    typer.echo(
+        f"selected={summary.selected_count} published={len(summary.published)} "
+        f"failed={len(summary.failed)} needs_login={len(summary.needs_login)} "
+        f"budget_stop={summary.stopped_by_budget}"
+    )
+    for pub_id, url in summary.published:
+        typer.echo(f"  ok    {pub_id} -> {url}")
+    for pub_id, err in summary.failed:
+        typer.echo(f"  FAIL  {pub_id}: {err}")
+    for pub_id, plat, acct in summary.needs_login:
+        typer.echo(f"  LOGIN {pub_id}: {plat}:{acct}")
+    if summary.failed or summary.needs_login:
+        raise typer.Exit(code=1)
+
+
+app.add_typer(batch_app, name="batch")
 
 
 if __name__ == "__main__":

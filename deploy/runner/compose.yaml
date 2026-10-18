@@ -1,0 +1,76 @@
+name: aether-publisher-runner
+
+services:
+  warp-proxy:
+    image: ${WARP_PROXY_IMAGE:-ghcr.io/seiry/cloudflare-warp-proxy:2026.5.29}
+    restart: "no"
+    volumes:
+      - ../../runtime/warp:/var/lib/cloudflare-warp
+    expose:
+      - "40000"
+    networks:
+      - publisher-net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS --max-time 20 --proxy socks5h://127.0.0.1:40000
+          https://www.cloudflare.com/cdn-cgi/trace | grep -q '^warp=on$'
+      interval: 10s
+      timeout: 25s
+      retries: 12
+      start_period: 20s
+
+  network-check:
+    image: curlimages/curl:8.12.1
+    restart: "no"
+    depends_on:
+      warp-proxy:
+        condition: service_healthy
+    command:
+      - --fail
+      - --show-error
+      - --silent
+      - --max-time
+      - "30"
+      - --proxy
+      - socks5h://warp-proxy:40000
+      - https://www.cloudflare.com/cdn-cgi/trace
+    networks:
+      - publisher-net
+
+  publisher:
+    image: ${PUBLISHER_IMAGE:-ghcr.io/aetherneollc/aether-publisher:main}
+    restart: "no"
+    depends_on:
+      warp-proxy:
+        condition: service_healthy
+    environment:
+      DATA_DIR: /runtime/data
+      ACCOUNTS_FILE: /runtime/accounts.yaml
+      HEADLESS: "1"
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:?CONTROL_PLANE_URL is required}
+      STUDIO_AGENT_KEY: ${STUDIO_AGENT_KEY:?STUDIO_AGENT_KEY is required}
+      CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:-}
+      CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:-}
+      AGENT_ID: ${AGENT_ID:-github-actions-publisher}
+      YT_PROXY: socks5://warp-proxy:40000
+      TIKTOK_PROXY: socks5://warp-proxy:40000
+      X_PROXY: socks5://warp-proxy:40000
+    volumes:
+      - ../../runtime:/runtime
+    command:
+      - batch
+      - run
+      - --max-tasks
+      - ${MAX_TASKS:-3}
+      - --max-minutes
+      - ${MAX_MINUTES:-240}
+      - --platforms
+      - ${PLATFORMS:-all}
+    networks:
+      - publisher-net
+
+networks:
+  publisher-net:
+    internal: false
