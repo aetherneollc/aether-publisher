@@ -1,9 +1,10 @@
 # dusk-publisher — multi-platform video publisher
 #
-# Base image ships Playwright's Chromium + all OS-level dependencies already
-# installed, which patchright (a drop-in Playwright replacement) reuses.
-ARG PLAYWRIGHT_VERSION=1.47.0
-FROM mcr.microsoft.com/playwright/python:v${PLAYWRIGHT_VERSION}-jammy
+# Patchright currently requires Python 3.11+. Install its recommended Google
+# Chrome channel and Linux dependencies explicitly so the Python and browser
+# versions cannot drift apart through an old Playwright base image.
+ARG PYTHON_VERSION=3.12
+FROM python:${PYTHON_VERSION}-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -19,11 +20,11 @@ COPY config ./config
 COPY scripts ./scripts
 COPY README.md THIRD_PARTY_NOTICES.md LICENSE ./
 
-RUN pip install --no-cache-dir -e . \
-    # patchright vendors its own Chromium build metadata but reuses the
-    # Playwright browser cache; this makes sure the "chrome" channel used by
-    # every adapter is actually present.
-    && python -m patchright install chrome --with-deps || python -m patchright install chrome
+RUN pip install --no-cache-dir -e .
+
+# `channel="chrome"` is used by every adapter and is the upstream Patchright
+# recommendation. --with-deps installs the required Debian libraries too.
+RUN python -m patchright install chrome --with-deps
 
 RUN mkdir -p /data/accounts /data/cache
 
