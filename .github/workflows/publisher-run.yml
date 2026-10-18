@@ -32,6 +32,8 @@ jobs:
       STUDIO_AGENT_KEY: ${{ secrets.STUDIO_AGENT_KEY }}
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      AETHER_VAULT_URL: ${{ secrets.AETHER_VAULT_URL }}
+      AETHER_VAULT_RUNNER_TOKEN: ${{ secrets.AETHER_VAULT_RUNNER_TOKEN }}
       AGENT_ID: github-actions-publisher
       MAX_TASKS: ${{ inputs.max_tasks }}
       MAX_MINUTES: ${{ inputs.max_minutes }}
@@ -48,10 +50,11 @@ jobs:
           set -euo pipefail
           mkdir -p runtime/data/accounts runtime/data/cache runtime/warp
           test -n "$ACCOUNTS_YAML_B64"
-          test -n "$COOKIE_BUNDLE_B64"
           test -n "$CF_WARP_MDM_B64"
           printf '%s' "$ACCOUNTS_YAML_B64" | base64 --decode > runtime/accounts.yaml
-          printf '%s' "$COOKIE_BUNDLE_B64" | base64 --decode | tar -xz -C runtime/data/accounts
+          if [ -n "$COOKIE_BUNDLE_B64" ]; then
+            printf '%s' "$COOKIE_BUNDLE_B64" | base64 --decode | tar -xz -C runtime/data/accounts
+          fi
           printf '%s' "$CF_WARP_MDM_B64" | base64 --decode > runtime/warp/mdm.xml
           chmod 600 runtime/accounts.yaml runtime/warp/mdm.xml
 

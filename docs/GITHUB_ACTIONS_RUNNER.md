@@ -30,10 +30,15 @@ publisher image. GitHub Actions is currently only the orchestrator.
 | `CF_ACCESS_CLIENT_ID` | Cloudflare Access service-token client ID, if Access protects the API |
 | `CF_ACCESS_CLIENT_SECRET` | Matching service-token secret |
 | `ACCOUNTS_YAML_B64` | Base64 of `runtime/accounts.yaml` |
-| `COOKIE_BUNDLE_B64` | Base64 gzip tar of account state files |
+| `COOKIE_BUNDLE_B64` | Optional legacy base64 gzip tar of account state files |
 | `CF_WARP_MDM_B64` | Base64 of the Zero Trust Linux `mdm.xml` profile |
+| `AETHER_VAULT_URL` | Account Vault Worker URL |
+| `AETHER_VAULT_RUNNER_TOKEN` | Account Vault runner bearer token |
 
 `CF_ACCESS_*` may be left empty when the control plane is not behind Access.
+When Account Vault is behind Access, these headers are also sent to its runner
+API. Batch mode downloads every `ready` account directly into the ephemeral
+runtime before claiming work, so `COOKIE_BUNDLE_B64` is no longer required.
 The WARP profile should use a narrowly scoped Zero Trust service token/device
 enrollment policy. Do not use a human Cloudflare password or API global key.
 Start from `config/cloudflare-warp.mdm.example.xml`; the service-token device

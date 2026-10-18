@@ -272,6 +272,20 @@ def batch_run(
 
     async def execute():
         try:
+            if settings.account_vault_url and settings.account_vault_runner_token:
+                from dusk_publisher.accounts.vault import AccountVaultClient
+
+                vault = AccountVaultClient(
+                    settings.account_vault_url,
+                    settings.account_vault_runner_token,
+                    cf_access_client_id=settings.cf_access_client_id,
+                    cf_access_client_secret=settings.cf_access_client_secret,
+                )
+                try:
+                    synced = await vault.sync_ready_accounts(settings.accounts_dir)
+                    typer.echo(f"vault_synced={synced}")
+                finally:
+                    await vault.aclose()
             return await pipeline.run_once(
                 max_tasks=max_tasks,
                 max_seconds=max_minutes * 60,

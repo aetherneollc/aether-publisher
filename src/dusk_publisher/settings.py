@@ -40,6 +40,12 @@ class Settings:
     cf_access_client_secret: str | None = field(
         default_factory=lambda: os.environ.get("CF_ACCESS_CLIENT_SECRET") or None
     )
+    account_vault_url: str | None = field(
+        default_factory=lambda: os.environ.get("AETHER_VAULT_URL") or None
+    )
+    account_vault_runner_token: str | None = field(
+        default_factory=lambda: os.environ.get("AETHER_VAULT_RUNNER_TOKEN") or None
+    )
 
     # Filesystem layout
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("DATA_DIR", "/data")))

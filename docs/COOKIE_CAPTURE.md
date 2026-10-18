@@ -64,9 +64,10 @@ as a GitHub environment secret, download only the selected accounts at job
 start, and delete plaintext in the unconditional cleanup step. This also makes
 individual cookie rotation possible without replacing one monolithic secret.
 
-Browser state refreshed during an ephemeral Actions run is not written back to
-GitHub Secrets. If a platform rotates a session, rerun the local capture helper.
-The R2 phase should add opt-in encrypted write-back with object versioning.
+The preferred production path is now the private Aether Account Vault Worker:
+its browser bridge captures state from official login tabs, encrypts each
+account independently in R2, and the batch runner fetches only `ready` states
+at startup. The GitHub Secret bundle remains a local/legacy fallback.
 
 ## Revocation
 
