@@ -32,12 +32,20 @@ publisher image. GitHub Actions is currently only the orchestrator.
 | `ACCOUNTS_YAML_B64` | Base64 of `runtime/accounts.yaml` |
 | `COOKIE_BUNDLE_B64` | Optional legacy base64 gzip tar of account state files |
 | `CF_WARP_MDM_B64` | Base64 of the Zero Trust Linux `mdm.xml` profile |
-| `AETHER_VAULT_URL` | Account Vault Worker URL |
-| `AETHER_VAULT_RUNNER_TOKEN` | Account Vault runner bearer token |
+| `AETHER_VAULT_URL` | Account Vault origin only, with no path (`https://<worker>.workers.dev`) |
+| `AETHER_VAULT_RUNNER_TOKEN` | Account Vault runner bearer token. Must equal the Worker secret `RUNNER_API_TOKEN` |
 
 `CF_ACCESS_*` may be left empty when the control plane is not behind Access.
-When Account Vault is behind Access, these headers are also sent to its runner
-API. Batch mode downloads every `ready` account directly into the ephemeral
+Account Vault is behind Cloudflare Access, and the runner sends the same
+service token there. A human Allow policy does not accept that token: Access
+answers with an HTML 302 login page, which is not the runner JSON API. The
+vault Access application needs its own **Service Auth** policy that includes
+this service token. `AETHER_VAULT_URL` must be the origin only; the client
+appends `/api/runner/accounts`. The Worker compares `Authorization: Bearer`
+with its `RUNNER_API_TOKEN` secret. **Actions → Account vault smoke test**
+checks that path and, on failure, prints the HTTP status, content type, and
+the first 200 bytes of the body without printing these secrets.
+Batch mode downloads every `ready` account directly into the ephemeral
 runtime before claiming work, so `COOKIE_BUNDLE_B64` is no longer required.
 The WARP profile should use a narrowly scoped Zero Trust service token/device
 enrollment policy. Do not use a human Cloudflare password or API global key.
