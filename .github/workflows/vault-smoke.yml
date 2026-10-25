@@ -11,21 +11,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
+
       - name: Verify Access and vault API
         env:
-          VAULT_URL: ${{ secrets.AETHER_VAULT_URL }}
-          VAULT_TOKEN: ${{ secrets.AETHER_VAULT_RUNNER_TOKEN }}
-          ACCESS_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          ACCESS_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-        run: |
-          set -euo pipefail
-          test -n "$VAULT_URL"
-          test -n "$VAULT_TOKEN"
-          test -n "$ACCESS_ID"
-          test -n "$ACCESS_SECRET"
-          curl --fail --silent --show-error \
-            -H "Authorization: Bearer $VAULT_TOKEN" \
-            -H "CF-Access-Client-Id: $ACCESS_ID" \
-            -H "CF-Access-Client-Secret: $ACCESS_SECRET" \
-            "$VAULT_URL/api/runner/accounts" \
-            | jq -e '.accounts | type == "array"'
+          AETHER_VAULT_URL: ${{ secrets.AETHER_VAULT_URL }}
+          AETHER_VAULT_RUNNER_TOKEN: ${{ secrets.AETHER_VAULT_RUNNER_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: python3 scripts/vault-smoke.py
