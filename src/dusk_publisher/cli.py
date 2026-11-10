@@ -192,7 +192,63 @@ def accounts_check_all(
         raise typer.Exit(code=1)
 
 
+@accounts_app.command("run-vault-checks")
+def accounts_run_vault_checks():
+    """Claim queued Account Vault proxy and cookie checks and post results.
+
+    Firefox runs on this machine, through each account proxy. A private Zero
+    Trust hostname is forwarded with cloudflared access tcp before Firefox.
+    Posted body fields are status, result, and detail. Proxy results are
+    up or down. Cookie results are ready, invalid, or skipped. A down proxy
+    or a check that did not finish is status failed and result skipped, not
+    cookie invalid.
+    """
+    settings = get_settings()
+    if not settings.account_vault_url or not settings.account_vault_runner_token:
+        typer.echo("AETHER_VAULT_URL and AETHER_VAULT_RUNNER_TOKEN are required")
+        raise typer.Exit(code=1)
+    from dusk_publisher.accounts.checks import run_queued_checks
+
+    posted = _run(run_queued_checks(settings))
+    for check_id, outcome in posted:
+        typer.echo(f"{check_id} {outcome}")
+    typer.echo(f"posted={len(posted)}")
+
+
 app.add_typer(accounts_app, name="accounts")
+
+
+browser_app = typer.Typer(help="Desktop Firefox or Chrome fingerprint and exit IP.")
+
+
+@browser_app.command("identity")
+def browser_identity_cmd():
+    """Show whether publish will use this PC's Firefox or Chrome profile."""
+    from dusk_publisher.browser_identity import (
+        chrome_source_user_data,
+        describe_identity,
+        firefox_source_profile,
+        profile_directory,
+        read_system_proxy,
+    )
+
+    settings = get_settings()
+    source = chrome_source_user_data()
+    firefox = firefox_source_profile()
+    profile = profile_directory(source, settings.chrome_profile_directory) if source and source.is_dir() else "Default"
+    typer.echo(
+        describe_identity(
+            mode=settings.browser_mode(),
+            family=settings.daily_family(),
+            source=source if source and source.is_dir() else None,
+            profile=profile,
+            proxy=read_system_proxy(),
+            firefox_profile=firefox if firefox and firefox.is_dir() else None,
+        )
+    )
+
+
+app.add_typer(browser_app, name="browser")
 
 
 @queue_app.command("run")
@@ -284,6 +340,10 @@ def batch_run(
                 try:
                     synced = await vault.sync_ready_accounts(settings.accounts_dir)
                     typer.echo(f"vault_synced={synced}")
+                    if await vault.sync_firefox_fingerprint(settings.data_dir):
+                        typer.echo("vault_fingerprint=written")
+                    else:
+                        typer.echo("vault_fingerprint=unchanged")
                 finally:
                     await vault.aclose()
             return await pipeline.run_once(

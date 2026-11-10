@@ -1,0 +1,75 @@
+name: Account checks
+
+on:
+  schedule:
+    # Hourly. Manual runs stay available. Does not publish videos.
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aether-publisher-account-checks
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BROWSER_IDENTITY: actions
+      BROWSER_FAMILY: firefox
+      DISPLAY: ":99"
+      HEADLESS: "false"
+      DATA_DIR: ${{ runner.temp }}/aether-publisher-data
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      AETHER_VAULT_URL: ${{ secrets.AETHER_VAULT_URL }}
+      AETHER_VAULT_RUNNER_TOKEN: ${{ secrets.AETHER_VAULT_RUNNER_TOKEN }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python -m pip install .
+
+      - name: Install Firefox, Xvfb, and cloudflared
+        shell: bash
+        run: |
+          sed -i 's/\r$//' scripts/install-actions-browser.sh
+          bash scripts/install-actions-browser.sh
+
+      - name: Run queued account checks
+        shell: bash
+        run: |
+          # Same Zero Trust step as the publisher, immediately before Firefox:
+          # a private Zero Trust hostname runs
+          #   cloudflared access tcp --hostname <host> --url 127.0.0.1:<port>
+          # using CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET (not printed).
+          # Cookie checks open Firefox through socks5://<user>@127.0.0.1:<port>
+          # and reuse each adapter's login-url check.
+          # A public DNS name that answers on 443 is Access, not a direct SOCKS server.
+          # A public http proxy, or a SOCKS port that accepts TCP while 443 does not, skips the tunnel.
+          # No account proxy keeps this runner's network.
+          # A down proxy is posted as proxy-down or error, never cookie-invalid.
+          # YT_PROXY, TIKTOK_PROXY, and X_PROXY are not set.
+          dusk-publisher accounts run-vault-checks
+
+      - name: Delete the job data directory
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${DATA_DIR:-}" in
+            */aether-publisher-data) rm -rf "$DATA_DIR" ;;
+            *)
+              echo "refusing to delete DATA_DIR=${DATA_DIR-}" >&2
+              exit 1
+              ;;
+          esac

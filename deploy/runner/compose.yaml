@@ -54,6 +54,8 @@ services:
       CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:-}
       CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:-}
       AGENT_ID: ${AGENT_ID:-github-actions-publisher}
+      FIREFOX_REMOTE_URL: ${FIREFOX_REMOTE_URL:-}
+      BROWSER_IDENTITY: ${BROWSER_IDENTITY:-auto}
       YT_PROXY: socks5://warp-proxy:40000
       TIKTOK_PROXY: socks5://warp-proxy:40000
       X_PROXY: socks5://warp-proxy:40000

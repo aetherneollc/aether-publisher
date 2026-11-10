@@ -26,12 +26,11 @@ from dusk_publisher.platforms.base import PlatformAdapter, PublishRequest
 from dusk_publisher.platforms.browser import (
     click_if_present,
     click_step,
-    close_session,
     fill_step,
     new_session,
-    save_storage_state,
     set_files_step,
 )
+from dusk_publisher.platforms.human import browse_after_post, browse_before_upload
 from dusk_publisher.platforms.x.selectors import HOME_URL, LOGIN_URL, LOGIN_URL_MARKERS, SEL
 
 log = get_logger(__name__)
@@ -57,9 +56,10 @@ class XAdapter(PlatformAdapter):
 
     async def login(self, account: str) -> LoginResult:
         cookie_file = self.cookie_file(account)
-        playwright, browser, context, page = await new_session(
-            storage_state=None, headless=False, proxy=self.settings.x_proxy
+        session = await new_session(
+            storage_state=None, headless=False, proxy=self.settings.x_proxy, settings=self.settings
         )
+        page = session.page
         try:
             await page.goto(LOGIN_URL, wait_until="domcontentloaded")
             log.info("[x:%s] please sign in in the opened browser window", account)
@@ -73,19 +73,20 @@ class XAdapter(PlatformAdapter):
                         break
                 await asyncio.sleep(1)
             if ok:
-                await save_storage_state(context, cookie_file)
-                return LoginResult(ok=True, detail="login succeeded", account_file=str(cookie_file))
+                account_file = await session.save_storage_state(cookie_file)
+                return LoginResult(ok=True, detail="login succeeded", account_file=account_file)
             return LoginResult(ok=False, detail=f"timed out waiting for login after {LOGIN_WAIT_SECONDS}s")
         finally:
-            await close_session(playwright, browser)
+            await session.close()
 
     async def check(self, account: str) -> CheckResult:
         cookie_file = self.cookie_file(account)
-        if not cookie_file.exists():
+        if not self.uses_real_browser() and not cookie_file.exists():
             return CheckResult(ok=False, detail="no cookie file, run login")
-        playwright, browser, context, page = await new_session(
-            storage_state=cookie_file, headless=True, proxy=self.settings.x_proxy
+        session = await new_session(
+            storage_state=cookie_file, headless=True, proxy=self.settings.x_proxy, settings=self.settings
         )
+        page = session.page
         try:
             await page.goto(HOME_URL, wait_until="domcontentloaded")
             await page.wait_for_timeout(3000)
@@ -98,17 +99,20 @@ class XAdapter(PlatformAdapter):
         except Exception as exc:
             return CheckResult(ok=False, detail=f"check failed: {exc}")
         finally:
-            await close_session(playwright, browser)
+            await session.close()
 
     async def _publish_impl(self, account: str, req: PublishRequest) -> PublishResult:
         cookie_file = self.cookie_file(account)
-        playwright, browser, context, page = await new_session(
-            storage_state=cookie_file, headless=self.settings.headless, proxy=self.settings.x_proxy
+        session = await new_session(
+            storage_state=cookie_file,
+            headless=self.settings.headless,
+            proxy=self.settings.x_proxy,
+            settings=self.settings,
         )
+        page = session.page
         try:
             log.info("[x:%s] posting %s", account, Path(req.video_path).name)
-            await page.goto(HOME_URL, wait_until="domcontentloaded")
-            await page.wait_for_timeout(3000)
+            await browse_before_upload(page, HOME_URL)
             if any(marker in page.url for marker in LOGIN_URL_MARKERS):
                 return PublishResult(ok=False, error="cookie expired mid-run; needs re-login")
 
@@ -128,12 +132,16 @@ class XAdapter(PlatformAdapter):
                 await self._highlight_dropback_reply(page, tweet_url, req.parent_url)
 
             try:
-                await save_storage_state(context, cookie_file)
+                await session.save_storage_state(cookie_file)
             except Exception:
                 pass
+            try:
+                await browse_after_post(page, HOME_URL)
+            except Exception as exc:
+                log.warning("[x:%s] after-post browse skipped: %s", account, exc)
             return PublishResult(ok=True, url=tweet_url)
         finally:
-            await close_session(playwright, browser)
+            await session.close()
 
     async def _wait_media_processed(self, page) -> None:
         for _ in range(MEDIA_PROCESSING_MAX_POLLS):

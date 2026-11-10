@@ -14,6 +14,7 @@ here rather than scattered through adapter.py.
 
 from __future__ import annotations
 
+FEED_URL = "https://www.tiktok.com/"
 UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?from=webapp&lang=en"
 LOGIN_URL_MARKERS = ["/login", "tiktok.com/login"]
 

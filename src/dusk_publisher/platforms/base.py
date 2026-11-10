@@ -57,8 +57,15 @@ class PlatformAdapter(ABC):
     def cookie_file(self, account: str) -> Path:
         return cookie_path(self.settings.data_dir, self.name, account)
 
+    def uses_real_browser(self) -> bool:
+        return self.settings.uses_real_browser()
+
     def _require_cookie(self, account: str) -> Path:
         path = self.cookie_file(account)
+        # The desktop Chrome profile is the login. A missing cookie JSON is
+        # not a reason to stop before that window opens.
+        if self.uses_real_browser():
+            return path
         if not has_valid_cookie_file(path):
             raise NeedsLoginError(self.name, account)
         return path

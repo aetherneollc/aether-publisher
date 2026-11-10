@@ -14,6 +14,7 @@ Several of these selectors are adapted from the MIT-licensed
 from __future__ import annotations
 
 STUDIO_URL = "https://studio.youtube.com"
+FEED_URL = "https://www.youtube.com/"
 UPLOAD_URL = "https://www.youtube.com/upload"
 
 VISIBILITY_RADIO_NAME = {

@@ -1,0 +1,72 @@
+# Copy to config/firefox-fingerprint.yaml (gitignored) or point
+# FIREFOX_FINGERPRINT_FILE at your copy. Also accepted at
+# $DATA_DIR/firefox-fingerprint.yaml.
+#
+# Fill every value from your own Firefox. about:support and a page that
+# prints navigator, Intl.DateTimeFormat().resolvedOptions().timeZone,
+# screen, devicePixelRatio, and WEBGL_debug_renderer_info are the source.
+# Leave a field empty until you have copied it. These placeholders are not
+# measurements.
+#
+# The publisher applies the non-empty strings as Firefox user prefs when it
+# launches Firefox for publish, check, or login. It does not enable
+# privacy.resistFingerprinting. On GitHub Actions, egress is the account
+# proxy (a private Zero Trust hostname is forwarded with cloudflared first).
+# Do not set YT_PROXY, X_PROXY, or TIKTOK_PROXY for that path.
+
+# navigator.userAgent -> general.useragent.override
+user_agent: ""
+
+# navigator.platform -> general.platform.override
+platform: ""
+
+# navigator.oscpu -> general.oscpu.override
+oscpu: ""
+
+# intl.accept_languages. A comma-separated list, or a YAML list of tags.
+languages: ""
+
+# IANA zone your Firefox reports. Sets the Firefox process TZ. Not a pref.
+timezone: ""
+
+# window.screen width and height in CSS pixels. Firefox has no pref for
+# these. Size the virtual display so the launched Firefox reports them.
+# null means "not copied yet".
+screen_width: null
+screen_height: null
+
+# window.devicePixelRatio -> layout.css.devPixelsPerPx when greater than 0.
+# null means "do not override".
+device_pixel_ratio: null
+
+# navigator.maxTouchPoints. Firefox has no pref for an arbitrary count; the
+# widget reports it, and current baseline protection collapses any value
+# above 1 to 5. null means "not copied yet". A desktop without a touchscreen
+# reports 0, which matches a VPS with no touchscreen.
+max_touch_points: null
+
+# WEBGL_debug_renderer_info UNMASKED_VENDOR_WEBGL
+# -> webgl.override-unmasked-vendor
+webgl_vendor: ""
+
+# WEBGL_debug_renderer_info UNMASKED_RENDERER_WEBGL
+# -> webgl.override-unmasked-renderer
+# When this is non-empty the publisher also sets
+# webgl.sanitize-unmasked-renderer to false. The default true rewrites the
+# string (SanitizeRenderer), so the override would not be the value you copied.
+webgl_renderer: ""
+
+# Captured Accept-Language header, including q values. When this is non-empty
+# it is intl.accept_languages. Otherwise `languages` is used.
+accept_language: ""
+
+# sec-ch-ua* headers the browser actually sent. Leave this empty when the
+# browser did not send them. Do not invent a Chrome client-hint set.
+# Ignored for those names when request_headers below already contains them.
+client_hints: {}
+
+# Header map from GET /api/runner/fingerprint. A non-empty accept-language
+# is intl.accept_languages. Only non-empty sec-ch-ua* names are sent as
+# extra HTTP headers. user-agent here is not copied. Empty strings are not
+# sent, and architecture / full_version_list are not turned into hints.
+request_headers: {}

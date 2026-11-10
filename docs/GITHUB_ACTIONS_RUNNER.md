@@ -1,25 +1,66 @@
 # GitHub Actions publisher runner
 
-The workflow is manual-only and runs a bounded batch. It does not contain a
-schedule trigger.
+The workflow runs a bounded batch every day at 00:00 UTC (08:00 in China) and
+can also be started manually. The job runs on `ubuntu-latest`. It installs
+Mozilla Firefox and Xvfb on that machine, then runs `dusk-publisher batch run`
+there. This workflow does not call the VPS and does not SSH anywhere.
+
+Firefox is the browser. It runs on the Actions machine, never on the VPS.
+When an account has a private Zero Trust proxy hostname, the publisher runs
+`cloudflared access tcp` with `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` and forwards that hostname to `127.0.0.1` before
+Firefox starts. Firefox then uses `socks5://<user>@127.0.0.1:<local port>`.
+A public DNS name that answers on 443 is the Access edge, not a direct SOCKS
+server, so it still uses that tunnel even if the stored proxy port also
+accepts a TCP handshake. A public http proxy, or a SOCKS hostname whose
+proxy port accepts TCP and whose port 443 does not, is passed to Firefox
+with no tunnel. An account
+with no proxy keeps the Actions network. The workflow does not set
+`YT_PROXY`, `X_PROXY`, `TIKTOK_PROXY`, or `FIREFOX_REMOTE_URL`.
+
+`FIREFOX_REMOTE_URL` still selects the attach path when that variable is set
+in a process, including under pytest's exclusion. This workflow does not set
+it. `BROWSER_IDENTITY=actions` does not switch to that path.
 
 ## Runtime shape
 
 ```text
-workflow_dispatch
-  -> restore account map, cookie bundle, and WARP MDM profile
-  -> start WARP Zero Trust SOCKS sidecar
-  -> verify cdn-cgi/trace reports warp=on
-  -> run publisher container
-       -> fetch work from the control plane
-       -> filter platform and order by account
-       -> claim and publish tasks sequentially
-       -> report each result
-  -> remove plaintext runtime files, even on failure
+schedule (00:00 UTC) or workflow_dispatch
+  -> actions/checkout
+  -> pip install .
+  -> scripts/install-actions-browser.sh
+       Mozilla Firefox (not Ubuntu's snap transitional firefox package)
+       xvfb installed, not started
+       FIREFOX_EXECUTABLE exported for later steps
+  -> BROWSER_IDENTITY=actions, BROWSER_FAMILY=firefox, DISPLAY=:99, HEADLESS=false
+  -> DATA_DIR is a temp directory for this job
+  -> dusk-publisher batch run
+       syncs ready account storage_state files from Account Vault
+       writes $DATA_DIR/firefox-fingerprint.yaml when the vault fingerprint
+       is an object; a null fingerprint leaves an existing file alone
+       starts Xvfb on :99 at the fingerprint screen size (1920x1080 when
+       either dimension is missing)
+       writes a mode 0600 proxy sidecar next to each cookie file
+       launches Firefox headed with those prefs, captured sec-ch-ua headers,
+       the account storage_state, and that account's proxy
+  -> always: delete DATA_DIR
 ```
 
-The same Docker composition can run on another runner without changing the
-publisher image. GitHub Actions is currently only the orchestrator.
+Secrets exist only in the job environment. They are not written into the repo.
+Cookie files stay Playwright `storage_state` JSON under `DATA_DIR`. The
+fingerprint file is the same shape `load_firefox_fingerprint` already reads.
+Neither is uploaded as an Actions artifact. The cleanup step deletes
+`DATA_DIR` even when the batch fails.
+
+There is no local Firefox profile on the runner. A missing cookie file still
+stops that account with `NeedsLoginError`. Sign-in state comes from Account
+Vault.
+
+The install script only installs packages. Screen size is known after the
+fingerprint download, so the publisher starts Xvfb, not the install script.
+When `device_pixel_ratio` is greater than 0, the framebuffer is the captured
+CSS size times that ratio. Firefox also gets `layout.css.devPixelsPerPx`, so
+`window.screen` CSS pixels match the capture.
 
 ## Required repository secrets
 
@@ -29,37 +70,15 @@ publisher image. GitHub Actions is currently only the orchestrator.
 | `STUDIO_AGENT_KEY` | Shared `/ops/*` API key |
 | `CF_ACCESS_CLIENT_ID` | Cloudflare Access service-token client ID, if Access protects the API |
 | `CF_ACCESS_CLIENT_SECRET` | Matching service-token secret |
-| `ACCOUNTS_YAML_B64` | Base64 of `runtime/accounts.yaml` |
-| `COOKIE_BUNDLE_B64` | Optional legacy base64 gzip tar of account state files |
-| `CF_WARP_MDM_B64` | Base64 of the Zero Trust Linux `mdm.xml` profile |
 | `AETHER_VAULT_URL` | Account Vault Worker URL |
 | `AETHER_VAULT_RUNNER_TOKEN` | Account Vault runner bearer token |
 
 `CF_ACCESS_*` may be left empty when the control plane is not behind Access.
 When Account Vault is behind Access, these headers are also sent to its runner
-API. Batch mode downloads every `ready` account directly into the ephemeral
-runtime before claiming work, so `COOKIE_BUNDLE_B64` is no longer required.
-The WARP profile should use a narrowly scoped Zero Trust service token/device
-enrollment policy. Do not use a human Cloudflare password or API global key.
-Start from `config/cloudflare-warp.mdm.example.xml`; the service-token device
-enrollment policy must use Cloudflare's **Service Auth** action. The pinned
-sidecar expects local proxy mode with MASQUE on internal port `40001`.
+API. `AGENT_ID` is `github-actions-publisher` for this workflow.
 
-Generate the first two account secrets with:
-
-```bash
-./scripts/capture-cookies.sh
-```
-
-Set the WARP profile without printing it to the terminal:
-
-```bash
-base64 -w0 path/to/mdm.xml | gh secret set CF_WARP_MDM_B64 \
-  --repo aetherneollc/aether-publisher
-```
-
-Set the remaining text secrets with `gh secret set NAME --repo ...`, which
-reads the secret from a hidden prompt or standard input.
+Set text secrets with `gh secret set NAME`, which reads the secret from a
+hidden prompt or standard input.
 
 ## Running a batch
 
@@ -70,14 +89,14 @@ Open **Actions -> Publisher run -> Run workflow** and choose:
   is allowed to finish.
 - `platforms`: `all` or a comma-separated subset such as `youtube,tiktok`.
 
-The workflow timeout is intentionally larger than the batch budget to leave
-room for the active upload and cleanup. Concurrency is one production job at a
-time; a second manual invocation queues instead of cancelling the active job.
+The workflow timeout is larger than the batch budget so the active upload can
+finish. Concurrency is one production job at a time; a second manual run
+queues instead of cancelling the active job.
 
 ## Operational limits
 
-- GitHub-hosted jobs are ephemeral, so local WARP and browser-state mutations
-  disappear after the run.
+- Account Vault `storage_state` is the login. The Actions machine does not
+  keep a Firefox profile between jobs.
 - A task should remain safely retryable because the control plane owns claim
   leases and final publication status.
 - Platform automation can break when a site changes its UI. A failed account
@@ -85,8 +104,3 @@ time; a second manual invocation queues instead of cancelling the active job.
   workflow is visibly red.
 - Use this automation only for accounts and content you are authorized to
   operate, within platform rules and GitHub Actions acceptable-use terms.
-- Cloudflare documents a request timeout for Local proxy mode. Before enabling
-  real publication, run a long-upload canary for every platform. If resumable
-  upload requests are dropped, replace only the network sidecar with a full
-  WARP network-namespace runner; the publisher container and batch contract do
-  not need to change.

@@ -25,14 +25,14 @@ from dusk_publisher.platforms.base import PlatformAdapter, PublishRequest
 from dusk_publisher.platforms.browser import (
     click_if_present,
     click_step,
-    close_session,
     fill_step,
     new_session,
-    save_storage_state,
     set_files_step,
     wait_visible_step,
 )
+from dusk_publisher.platforms.human import browse_after_post, browse_before_upload, human_pause, human_type
 from dusk_publisher.platforms.youtube.selectors import (
+    FEED_URL,
     LOGGED_IN_URL_MARKER,
     LOGIN_URL_MARKERS,
     SEL,
@@ -107,9 +107,10 @@ class YouTubeAdapter(PlatformAdapter):
     async def login(self, account: str) -> LoginResult:
         cookie_file = self.cookie_file(account)
         # Login must always be headed: a human has to type credentials / 2FA.
-        playwright, browser, context, page = await new_session(
-            storage_state=None, headless=False, proxy=self.settings.yt_proxy
+        session = await new_session(
+            storage_state=None, headless=False, proxy=self.settings.yt_proxy, settings=self.settings
         )
+        page = session.page
         try:
             await page.goto(STUDIO_URL, wait_until="domcontentloaded")
             log.info("[youtube:%s] please sign in to Google/YouTube in the opened browser window", account)
@@ -121,19 +122,20 @@ class YouTubeAdapter(PlatformAdapter):
                     break
                 await asyncio.sleep(1)
             if ok:
-                await save_storage_state(context, cookie_file)
-                return LoginResult(ok=True, detail="login succeeded", account_file=str(cookie_file))
+                account_file = await session.save_storage_state(cookie_file)
+                return LoginResult(ok=True, detail="login succeeded", account_file=account_file)
             return LoginResult(ok=False, detail=f"timed out waiting for login after {LOGIN_WAIT_SECONDS}s")
         finally:
-            await close_session(playwright, browser)
+            await session.close()
 
     async def check(self, account: str) -> CheckResult:
         cookie_file = self.cookie_file(account)
-        if not cookie_file.exists():
+        if not self.uses_real_browser() and not cookie_file.exists():
             return CheckResult(ok=False, detail="no cookie file, run login")
-        playwright, browser, context, page = await new_session(
-            storage_state=cookie_file, headless=True, proxy=self.settings.yt_proxy
+        session = await new_session(
+            storage_state=cookie_file, headless=True, proxy=self.settings.yt_proxy, settings=self.settings
         )
+        page = session.page
         try:
             await page.goto(STUDIO_URL, wait_until="domcontentloaded")
             await page.wait_for_timeout(3000)
@@ -145,15 +147,22 @@ class YouTubeAdapter(PlatformAdapter):
         except Exception as exc:
             return CheckResult(ok=False, detail=f"check failed: {exc}")
         finally:
-            await close_session(playwright, browser)
+            await session.close()
 
     async def _publish_impl(self, account: str, req: PublishRequest) -> PublishResult:
         cookie_file = self.cookie_file(account)
-        playwright, browser, context, page = await new_session(
-            storage_state=cookie_file, headless=self.settings.headless, proxy=self.settings.yt_proxy
+        session = await new_session(
+            storage_state=cookie_file,
+            headless=self.settings.headless,
+            proxy=self.settings.yt_proxy,
+            settings=self.settings,
         )
+        page = session.page
         try:
             log.info("[youtube:%s] uploading %s", account, Path(req.video_path).name)
+            await browse_before_upload(page, FEED_URL)
+            if any(marker in page.url for marker in LOGIN_URL_MARKERS):
+                return PublishResult(ok=False, error="cookie expired mid-run; needs re-login")
             await page.goto(UPLOAD_URL, wait_until="domcontentloaded")
             await page.wait_for_timeout(3000)
             if any(marker in page.url for marker in LOGIN_URL_MARKERS):
@@ -183,9 +192,13 @@ class YouTubeAdapter(PlatformAdapter):
                 try:
                     await click_if_present(page, SEL["tags_toggle_more"], timeout=6000)
                     await page.wait_for_timeout(800)
-                    tag_input = page.locator(SEL["tags_input"]).first
-                    await tag_input.click()
-                    await tag_input.type(",".join(req.tags)[:500] + ",", delay=4)
+                    await fill_step(
+                        page,
+                        self.name,
+                        "fill tags",
+                        SEL["tags_input"],
+                        ",".join(req.tags)[:500] + ",",
+                    )
                 except Exception as exc:
                     log.warning("[youtube:%s] tags input skipped (non-fatal): %s", account, exc)
 
@@ -219,12 +232,16 @@ class YouTubeAdapter(PlatformAdapter):
                 )
 
             try:
-                await save_storage_state(context, cookie_file)  # refresh cookie
+                await session.save_storage_state(cookie_file)  # refresh cookie
             except Exception:
                 pass
+            try:
+                await browse_after_post(page, FEED_URL)
+            except Exception as exc:
+                log.warning("[youtube:%s] after-post browse skipped: %s", account, exc)
             return PublishResult(ok=True, url=video_url)
         finally:
-            await close_session(playwright, browser)
+            await session.close()
 
     async def _add_to_playlist(self, page, playlist: str) -> None:
         """Best-effort: join (or create) a playlist. Non-fatal — a failure here
@@ -244,8 +261,9 @@ class YouTubeAdapter(PlatformAdapter):
                     await click_if_present(page, SEL["playlist_new_menu_item"], timeout=3000)
                     title_box = page.locator(SEL["playlist_title_box"]).first
                     if await title_box.count():
+                        await human_pause(page)
                         await title_box.click()
-                        await title_box.type(playlist, delay=6)
+                        await human_type(page, playlist)
                     await click_if_present(page, SEL["playlist_create_button"], timeout=4000)
         except Exception as exc:
             log.warning("[youtube] playlist step skipped (non-fatal): %s", exc)

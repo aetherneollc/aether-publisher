@@ -12,15 +12,21 @@ if [[ ! -s "$runtime_dir/accounts.yaml" ]]; then
   exit 2
 fi
 
-if [[ ! -s "$runtime_dir/warp/mdm.xml" ]]; then
-  echo "runtime/warp/mdm.xml is missing; inject the Zero Trust MDM profile before starting" >&2
-  exit 2
-fi
-
 cleanup() {
   docker compose -f "$compose_file" down --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+
+if [[ -n "${FIREFOX_REMOTE_URL:-}" ]]; then
+  echo "FIREFOX_REMOTE_URL is set; the Action drives that Firefox and does not use WARP"
+  docker compose -f "$compose_file" run --no-deps --rm publisher
+  exit 0
+fi
+
+if [[ ! -s "$runtime_dir/warp/mdm.xml" ]]; then
+  echo "runtime/warp/mdm.xml is missing; inject the Zero Trust MDM profile before starting" >&2
+  exit 2
+fi
 
 docker compose -f "$compose_file" pull
 docker compose -f "$compose_file" up -d warp-proxy

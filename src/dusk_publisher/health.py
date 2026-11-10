@@ -145,13 +145,14 @@ async def probe_browser_launch(*, proxy: str | None = None, timeout_s: float = 3
     import asyncio
 
     try:
-        from dusk_publisher.platforms.browser import close_session, new_session
+        from dusk_publisher.platforms.browser import new_session
     except Exception as exc:  # pragma: no cover - would mean our own package is broken
         return False, f"could not import browser helpers: {exc}"
 
     try:
-        playwright, browser, context, page = await asyncio.wait_for(
-            new_session(storage_state=None, headless=True, proxy=proxy), timeout=timeout_s
+        session = await asyncio.wait_for(
+            new_session(storage_state=None, headless=True, proxy=proxy, identity="ephemeral"),
+            timeout=timeout_s,
         )
     except ImportError as exc:
         return False, f"patchright not installed: {exc}"
@@ -159,7 +160,7 @@ async def probe_browser_launch(*, proxy: str | None = None, timeout_s: float = 3
         return False, f"chromium launch failed: {exc}"
 
     try:
-        await close_session(playwright, browser)
+        await session.close()
     except Exception as exc:  # noqa: BLE001 - launch already succeeded; closing failing is worth knowing but not fatal
         log.warning("browser probe: launched fine but close_session raised: %s", exc)
     return True, None

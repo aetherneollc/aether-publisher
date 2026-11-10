@@ -19,6 +19,13 @@ venv/
 dist/
 build/
 
+# Cloned desktop browser profiles (cookies). Never commit.
+daily-chrome/
+daily-firefox/
+
+# Local Firefox fingerprint copied from the operator's own browser.
+config/firefox-fingerprint.yaml
+
 # Browser automation artifacts
 verify_code.txt
 *.png

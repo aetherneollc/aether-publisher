@@ -1,6 +1,9 @@
 name: Publisher run
 
 on:
+  schedule:
+    # 00:00 UTC is 08:00 in China. Manual runs stay available.
+    - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       max_tasks:
@@ -28,6 +31,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
+      BROWSER_IDENTITY: actions
+      BROWSER_FAMILY: firefox
+      DISPLAY: ":99"
+      HEADLESS: "false"
+      DATA_DIR: ${{ runner.temp }}/aether-publisher-data
       CONTROL_PLANE_URL: ${{ secrets.CONTROL_PLANE_URL }}
       STUDIO_AGENT_KEY: ${{ secrets.STUDIO_AGENT_KEY }}
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
@@ -35,33 +43,50 @@ jobs:
       AETHER_VAULT_URL: ${{ secrets.AETHER_VAULT_URL }}
       AETHER_VAULT_RUNNER_TOKEN: ${{ secrets.AETHER_VAULT_RUNNER_TOKEN }}
       AGENT_ID: github-actions-publisher
-      MAX_TASKS: ${{ inputs.max_tasks }}
-      MAX_MINUTES: ${{ inputs.max_minutes }}
-      PLATFORMS: ${{ inputs.platforms }}
+      MAX_TASKS: ${{ inputs.max_tasks || '3' }}
+      MAX_MINUTES: ${{ inputs.max_minutes || '240' }}
+      PLATFORMS: ${{ inputs.platforms || 'all' }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out the repository
+        uses: actions/checkout@v7
 
-      - name: Restore runtime secrets
-        env:
-          ACCOUNTS_YAML_B64: ${{ secrets.ACCOUNTS_YAML_B64 }}
-          COOKIE_BUNDLE_B64: ${{ secrets.COOKIE_BUNDLE_B64 }}
-          CF_WARP_MDM_B64: ${{ secrets.CF_WARP_MDM_B64 }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python -m pip install .
+
+      - name: Install Firefox and Xvfb
+        shell: bash
+        run: |
+          sed -i 's/\r$//' scripts/install-actions-browser.sh
+          bash scripts/install-actions-browser.sh
+
+      - name: Run dusk-publisher batch
+        shell: bash
+        run: |
+          # Account proxy is applied inside dusk-publisher, immediately before Firefox:
+          # a private Zero Trust hostname runs
+          #   cloudflared access tcp --hostname <host> --url 127.0.0.1:<port>
+          # using CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET (not printed).
+          # Firefox then uses socks5://<user>@127.0.0.1:<port>.
+          # A public DNS name that answers on 443 is Access, not a direct SOCKS server.
+          # A public http proxy, or a SOCKS port that accepts TCP while 443 does not, skips the tunnel.
+          # No account proxy keeps this runner's network.
+          # YT_PROXY, TIKTOK_PROXY, and X_PROXY are not set.
+          dusk-publisher batch run --max-tasks "$MAX_TASKS" --max-minutes "$MAX_MINUTES" --platforms "$PLATFORMS"
+
+      - name: Delete the job data directory
+        if: always()
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p runtime/data/accounts runtime/data/cache runtime/warp
-          test -n "$ACCOUNTS_YAML_B64"
-          test -n "$CF_WARP_MDM_B64"
-          printf '%s' "$ACCOUNTS_YAML_B64" | base64 --decode > runtime/accounts.yaml
-          if [ -n "$COOKIE_BUNDLE_B64" ]; then
-            printf '%s' "$COOKIE_BUNDLE_B64" | base64 --decode | tar -xz -C runtime/data/accounts
-          fi
-          printf '%s' "$CF_WARP_MDM_B64" | base64 --decode > runtime/warp/mdm.xml
-          chmod 600 runtime/accounts.yaml runtime/warp/mdm.xml
-
-      - name: Run bounded publisher batch
-        run: ./scripts/runner-entrypoint.sh
-
-      - name: Remove runtime secrets
-        if: always()
-        run: |
-          find runtime -mindepth 1 -maxdepth 1 ! -name README.md ! -name .gitignore -exec rm -rf -- {} +
+          case "${DATA_DIR:-}" in
+            */aether-publisher-data) rm -rf "$DATA_DIR" ;;
+            *)
+              echo "refusing to delete DATA_DIR=${DATA_DIR-}" >&2
+              exit 1
+              ;;
+          esac

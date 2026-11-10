@@ -170,20 +170,15 @@ Use `--platform youtube` or `--account yt_zh_main` to refresh only part of the
 set. See [`docs/COOKIE_CAPTURE.md`](docs/COOKIE_CAPTURE.md) for the security and
 size-limit details.
 
-## Manual GitHub Actions runner
+## GitHub Actions publisher
 
-The `Publisher run` workflow is deliberately `workflow_dispatch` only. One
-invocation restores runtime state, starts a Cloudflare Zero Trust WARP SOCKS
-sidecar, verifies that traffic is actually on WARP, then processes several
-publication tasks sequentially inside the same publisher container. It is
-bounded by both task count and elapsed time and uses workflow concurrency to
-prevent two publishers from claiming the same account at once.
+`Publisher run` runs on the GitHub-hosted `ubuntu-latest` machine. The job
+installs Mozilla Firefox and Xvfb, syncs Account Vault cookies and the
+fingerprint, and runs `dusk-publisher batch run` there. It does not call the
+VPS. Task count, time budget, and concurrency limits still bound the batch.
 
 Required repository secrets are documented in
-[`docs/GITHUB_ACTIONS_RUNNER.md`](docs/GITHUB_ACTIONS_RUNNER.md). The Docker
-composition is runner-independent: the same `scripts/runner-entrypoint.sh`
-works on GitHub-hosted runners today and can be invoked by a VPS or another CI
-runner later.
+[`docs/GITHUB_ACTIONS_RUNNER.md`](docs/GITHUB_ACTIONS_RUNNER.md).
 
 ## Local queue mode (standalone, no control plane needed)
 
